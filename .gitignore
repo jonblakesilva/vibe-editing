@@ -28,3 +28,11 @@ __pycache__/
 **/youtube_token*.json
 **/client_secret*.json
 .vibe-editing/
+
+# Vibe Studio
+.studio-test/
+studio/motion/remotion/node_modules/
+studio/motion/remotion/out/
+studio/tests/fixtures/*.wav
+studio/tests/fixtures/*.mp4
+.pytest_cache/
