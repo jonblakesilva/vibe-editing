@@ -35,8 +35,8 @@ def source_time(pid: str, file: str, at: float) -> float | None:
     main-edit exports; Shorts are cut from several places, so they keep only their own time."""
     if file in ("", "source"):
         return at
-    if "/shorts/" in f"/{file}" or file.startswith("shorts/"):
-        return None
+    if file.startswith("shorts/") or "versions/" in file:
+        return None  # Shorts are stitched from several places; old versions had other timelines
     from .pipeline import paths
     pp = paths(pid)["plan"]
     if not pp.exists():
@@ -47,14 +47,36 @@ def source_time(pid: str, file: str, at: float) -> float | None:
     return round(tl.to_source(min(at, tl.duration)), 3)
 
 
-def add(pid: str, text: str, *, at: float, file: str = "source", author: str = "you") -> dict:
+def add(pid: str, text: str, *, at: float, file: str = "source", author: str = "you",
+        end: float | None = None, annotation: list | None = None, parent: str | None = None) -> dict:
+    """end: optional range end; annotation: shapes drawn on the frame in 0..1 coordinates
+    ([{"type": "pen|arrow|rect", "color": "#hex", "points": [[x, y], ...]}]);
+    parent: id of the comment this replies to."""
     items = load(pid)
+    if parent and not any(x["id"] == parent for x in items):
+        raise KeyError(f"No comment {parent} to reply to")
     c = {"id": uuid.uuid4().hex[:8], "file": file, "at": round(float(at), 3),
-         "source_at": source_time(pid, file, float(at)), "text": text.strip(), "author": author,
+         "end": round(float(end), 3) if end is not None and float(end) > float(at) else None,
+         "source_at": source_time(pid, file, float(at)), "text": text.strip(), "author": author or "you",
+         "annotation": _clean_shapes(annotation), "parent": parent,
          "status": "open", "created": time.strftime("%Y-%m-%d %H:%M:%S"), "resolution": None}
     items.append(c)
     _save(pid, items)
     return c
+
+
+def _clean_shapes(shapes) -> list | None:
+    if not shapes:
+        return None
+    out = []
+    for sh in shapes[:50]:
+        if sh.get("type") not in ("pen", "arrow", "rect"):
+            continue
+        pts = [[round(min(1, max(0, float(x))), 4), round(min(1, max(0, float(y))), 4)]
+               for x, y in (sh.get("points") or [])[:500]]
+        if len(pts) >= 2:
+            out.append({"type": sh["type"], "color": str(sh.get("color", "#F97316"))[:9], "points": pts})
+    return out or None
 
 
 def update(pid: str, cid: str, **fields) -> dict:
@@ -69,7 +91,7 @@ def update(pid: str, cid: str, **fields) -> dict:
 
 
 def delete(pid: str, cid: str) -> None:
-    _save(pid, [c for c in load(pid) if c["id"] != cid])
+    _save(pid, [c for c in load(pid) if c["id"] != cid and c.get("parent") != cid])
 
 
 def try_apply(pid: str, cid: str) -> dict:

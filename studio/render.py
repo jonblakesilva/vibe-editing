@@ -15,6 +15,7 @@ import json
 import re
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -166,6 +167,23 @@ def graphics_for_output(plan: dict, tl: Timeline, out_spec: dict, motion_dir: Pa
     return [g for g in items if g["start"] < tl.duration - 0.5]
 
 
+def archive_previous(out_path: Path, note: dict | None = None) -> int | None:
+    """Keep every earlier render as a numbered version (exports/.../versions/<name>/vN.mp4)
+    so reviewers can compare versions, Frame.io style. Returns the archived number."""
+    if not out_path.exists():
+        return None
+    vdir = out_path.parent / "versions" / out_path.stem
+    vdir.mkdir(parents=True, exist_ok=True)
+    n = len(list(vdir.glob("v*.mp4"))) + 1
+    out_path.replace(vdir / f"v{n}.mp4")
+    meta = vdir / "versions.json"
+    data = json.loads(meta.read_text(encoding="utf-8")) if meta.exists() else []
+    data.append({"v": n, "file": f"versions/{out_path.stem}/v{n}.mp4",
+                 "archived": time.strftime("%Y-%m-%d %H:%M:%S"), **(note or {})})
+    meta.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    return n
+
+
 def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dict, out_path: Path,
            work: Path, *, quality: str = "final", burn_captions: bool | None = None,
            graphics: list[dict] | None = None, faces: list[dict] | None = None,
@@ -205,7 +223,7 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
     # 2) zooms (punch-ins / slow pushes), centered on the speaker
     zooms = []
     for z in plan.get("zooms", []):
-        if z.get("enabled", True):
+        if z.get("enabled", True) and tl.to_edit((z["start"] + z["end"]) / 2) is not None:
             span = tl.span_to_edit(z["start"], z["end"])
             if span:
                 zooms.append({**z, "start": span[0], "end": span[1]})
@@ -281,6 +299,7 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
             "-t", f"{info.duration:.3f}", str(tmp)]
     media.run_ffmpeg(args, duration=info.duration, cancel=cancel, env=media.fontconfig_env(),
                      on_progress=(lambda p: progress("finish", p)) if progress else None)
+    archive_previous(out_path, {"plan_version": plan.get("version")})
     tmp.replace(out_path)
     notes = []
     if behind:

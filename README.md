@@ -81,6 +81,21 @@ exports, and dark/light mode. **Comments:** pause any video (original, preview o
 note, and it is pinned to that moment (shown as a dot on the timeline). Simple requests ("remove that
 zoom") can be applied with one click; for the rest, tell Claude "work through my comments".
 
+**Review screen (like Frame.io):** click **Review videos** (or open
+`http://127.0.0.1:8765/review/<project id>`). Every rendered video is listed with its versions — each
+re-render keeps the previous one as v1, v2, v3 — and you can:
+- watch with frame-accurate timecode, step frame by frame, change speed, go full screen;
+- comment at a moment or over a range (press **I** and **O**), draw on the frame (pen, arrow, box);
+- see every comment as an avatar on the scrub bar, click one to jump there with its drawing shown;
+- reply in threads, tick comments **Done**, filter Open / All / Done;
+- compare two versions side by side, in sync;
+- set each video to Needs review / In progress / Changes requested / Approved (a sign-off only; nothing
+  is published).
+
+Keyboard: Space/K play-pause, J/L back/forward 1 s, arrows step one frame (Shift = 1 s), I/O range,
+C comment, D draw, Esc clear. Then tell Claude "work through my comments": it applies each one,
+replies in the thread when it needs a decision, marks the rest Done, and renders a new version.
+
 Projects, brands and renders are stored in `%USERPROFILE%\VibeStudio` (override with
 `VIBE_STUDIO_HOME`), never inside the repository.
 

@@ -94,9 +94,11 @@ def cmd_fetch(a):
     out = config.DATA_HOME / "tella"
     out.mkdir(parents=True, exist_ok=True)
     name = (a.name or Path(urlparse(a.url).path).stem or "recording").replace("/", "_")[:80]
-    dst = out / f"{time.strftime('%Y%m%d-%H%M%S')}_{name}.mp4"
+    stamp = time.strftime('%Y%m%d-%H%M%S')
     with requests.get(a.url, stream=True, timeout=60) as r:
         r.raise_for_status()
+        is_zip = "zip" in r.headers.get("content-type", "") or ".zip" in urlparse(a.url).path
+        dst = out / f"{stamp}_{name}.{'zip' if is_zip else 'mp4'}"
         total = int(r.headers.get("content-length") or 0)
         done = 0
         cb = _progress_printer()
@@ -107,7 +109,21 @@ def cmd_fetch(a):
                 if total:
                     cb("download", done / total)
     print(f"Saved {dst} ({dst.stat().st_size / 1e6:.1f} MB)")
-    a.source, a.copy = str(dst), False
+    if dst.suffix == ".zip":
+        # Tella "raw"/"tracks" exports: separate screen and camera recordings in one zip.
+        import zipfile
+        folder = dst.with_suffix("")
+        with zipfile.ZipFile(dst) as z:
+            for m in z.infolist():
+                target = (folder / m.filename).resolve()
+                if folder.resolve() not in target.parents and target != folder.resolve():
+                    raise ValueError(f"Unsafe path in zip: {m.filename}")
+            z.extractall(folder)
+        print("Contains:", ", ".join(p.name for p in proj_mod.find_videos(folder)))
+        a.source = str(folder)
+    else:
+        a.source = str(dst)
+    a.copy = False
     return cmd_import(a)
 
 
@@ -291,6 +307,14 @@ def cmd_comments(a):
         c = comments.add(pid, a.add, at=a.at or 0.0, file=a.file)
         print(f"Added comment {c['id']} at {c['at']}s")
         return 0
+    if a.reply:
+        parent = next((c for c in comments.load(pid) if c["id"] == a.reply), None)
+        if not parent:
+            print(f"No comment {a.reply}")
+            return 1
+        c = comments.add(pid, a.text or "", at=parent["at"], file=parent["file"], author="Claude (editor)", parent=a.reply)
+        print(f"Replied {c['id']} under {a.reply}")
+        return 0
     if a.resolve:
         comments.update(pid, a.resolve, status="resolved", resolution=a.note or "Done")
         print(f"Resolved {a.resolve}")
@@ -299,10 +323,14 @@ def cmd_comments(a):
     shown = [c for c in items if a.all or c["status"] == "open"]
     if not shown:
         print("No open comments." if not a.all else "No comments.")
-    for c in shown:
+    for c in [x for x in shown if not x.get("parent")]:
         where = "original" if c["file"] == "source" else c["file"]
         src = f" (original {c['source_at']:.1f}s)" if c.get("source_at") is not None and c["file"] != "source" else ""
-        print(f"[{c['id']}] {c['status']:<8} {where} @ {c['at']:.1f}s{src}: {c['text']}")
+        rng = f"-{c['end']:.1f}s" if c.get("end") else ""
+        extra = " [has drawing]" if c.get("annotation") else ""
+        print(f"[{c['id']}] {c['status']:<8} {c.get('author', 'you')} | {where} @ {c['at']:.1f}s{rng}{src}{extra}: {c['text']}")
+        for r in [x for x in items if x.get("parent") == c["id"]]:
+            print(f"      reply from {r.get('author', 'you')}: {r['text']}")
     return 0
 
 
@@ -429,6 +457,8 @@ def main(argv=None):
     s.add_argument("--at", type=float, help="seconds into the file")
     s.add_argument("--file", default="source", help="'source' or an export path like name_youtube.mp4")
     s.add_argument("--resolve", help="comment id to mark resolved")
+    s.add_argument("--reply", help="comment id to reply to (use with --text)")
+    s.add_argument("--text", help="reply text")
     s.add_argument("--note", help="what was done (with --resolve)")
     s.add_argument("--all", action="store_true")
     s.set_defaults(fn=cmd_comments)

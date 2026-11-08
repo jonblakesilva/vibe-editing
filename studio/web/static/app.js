@@ -68,6 +68,10 @@ async function refresh() {
   $('#approveBtn').hidden = !plan || approved;
   $('#renderBtn').hidden = !approved;
   $('#previewBtn').disabled = !plan;
+  const hasVideos = (state.data.exports || []).some((x) => x.endsWith('.mp4'));
+  $('#reviewLink').href = `/review/${encodeURIComponent(state.pid)}`;
+  $('#reviewLink').setAttribute('aria-disabled', !hasVideos);
+  $('#reviewLink').title = hasVideos ? 'Frame.io-style review: comment, draw, compare versions, approve' : 'Make a preview first';
   setupPlayer();
   await loadComments();
   drawStrip();

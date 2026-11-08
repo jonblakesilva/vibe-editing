@@ -78,11 +78,20 @@ title is on screen. Works best with one person and a clean background; hair edge
 speaker fills most of the title area (tight 9:16 crops) the title is put in front and the render prints a
 note - pass that note on to the user.
 
+## Review screen (Frame.io style)
+`http://127.0.0.1:8765/review/<project id>` - every rendered video with its versions (each re-render
+keeps the previous one as v1, v2, ...), side-by-side version compare, frame-accurate timecode, comments
+with time ranges (I/O), drawings on the frame, threaded replies, Done checkboxes and a per-video status
+(Needs review / In progress / Changes requested / Approved). Reviewer "Approved" is a sign-off on that
+video only; it never publishes. Comments with drawings point at something on screen: read the drawing
+box coordinates (0..1 of the frame) to know what they mean.
+
 ## Review comments
 The user can pin comments to moments in any video from the dashboard. When they say "work through my
 comments" (or after they review a preview), run `studio comments <p>` to list open comments. For each:
 turn it into revision ops (comments on exports also show the matching original-recording time), apply
-them, then `studio comments <p> --resolve <id> --note "what you changed"`. Ask the user if a comment is
+them, then `studio comments <p> --resolve <id> --note "what you changed"`. To answer in the thread
+instead (e.g. asking which take they prefer): `studio comments <p> --reply <id> --text "..."`. Ask the user if a comment is
 ambiguous. Re-run the preview afterwards.
 
 ## 4. Preview, approve, render

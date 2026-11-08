@@ -31,11 +31,22 @@ def srt_time(t: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+def _left_in_sentence(words: list[dict], i: int) -> int:
+    n = 0
+    for w in words[i:]:
+        n += 1
+        if w["word"].endswith(PUNCT_END):
+            break
+    return n
+
+
 def chunk_words(words: list[dict], *, max_words: int = 6, max_dur: float = 2.8, gap: float = 0.45) -> list[list[dict]]:
     chunks, cur = [], []
     for i, w in enumerate(words):
-        if cur and (len(cur) >= max_words or w["start"] - cur[-1]["end"] > gap
-                    or w["end"] - cur[0]["start"] > max_dur):
+        paused = cur and w["start"] - cur[-1]["end"] > gap
+        # never strand one or two words of a sentence on their own ("battle.")
+        tail = _left_in_sentence(words, i) <= 2 and not paused and len(cur) < max_words + 2
+        if cur and not tail and (len(cur) >= max_words or paused or w["end"] - cur[0]["start"] > max_dur):
             chunks.append(cur)
             cur = []
         cur.append(w)

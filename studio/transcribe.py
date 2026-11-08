@@ -32,6 +32,21 @@ def _hash_file(path: Path) -> str:
     return h.hexdigest()[:16]
 
 
+def merge_split_numbers(words: list[dict]) -> list[dict]:
+    """Whisper often splits "25,000" into "25" + ",000". Join them back into one word
+    (start of the first, end of the last) so captions read naturally."""
+    import re
+    out: list[dict] = []
+    for w in words:
+        if out and re.match(r"^[,.]\d", w["word"].strip()) and re.search(r"\d$", out[-1]["word"].strip()):
+            prev = out[-1]
+            out[-1] = {**prev, "word": prev["word"].strip() + w["word"].strip(), "end": w["end"],
+                       "prob": min(prev.get("prob", 1), w.get("prob", 1))}
+        else:
+            out.append(w)
+    return out
+
+
 def normalize(segments: list[dict], *, language: str, duration: float, engine: str, model: str) -> dict:
     words = []
     for seg in segments:
@@ -41,6 +56,7 @@ def normalize(segments: list[dict], *, language: str, duration: float, engine: s
                 continue
             words.append({"word": text, "start": round(float(w["start"]), 3),
                           "end": round(float(w["end"]), 3), "prob": round(float(w.get("prob", 1.0)), 3)})
+    words = merge_split_numbers(words)
     # Guarantee monotonic, non-overlapping word times (some engines overlap by a few ms).
     for i in range(1, len(words)):
         if words[i]["start"] < words[i - 1]["end"]:
@@ -186,7 +202,14 @@ def apply_vocabulary(transcript: dict, vocabulary: list[str], threshold: float =
                 before = " ".join(w["word"] for w in words[i:i + n])
                 for k, w in enumerate(words[i:i + n]):
                     trail = re.search(r"[,.?!]*$", w["word"]).group(0)
-                    w["word"] = target[k] + trail
+                    core = w["word"].strip().rstrip(",.?!")
+                    # keep what was said: a plural/possessive ending stays ("profiles" -> "Profiles")
+                    suffix = ""
+                    for end in ("'s", "s"):
+                        if core.lower().endswith(end) and not target[k].lower().endswith(end):
+                            suffix = end
+                            break
+                    w["word"] = target[k] + suffix + trail
                     w["corrected"] = True
                 fixes.append({"index": i, "before": before, "after": phrase})
     return fixes

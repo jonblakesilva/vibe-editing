@@ -94,7 +94,7 @@ def get_project(pid: str):
         segments = tl.segments
         plan["stats"] = plan_mod.stats(plan)
     exports = sorted(str(x.relative_to(p["exports"])).replace("\\", "/") for x in p["exports"].rglob("*")
-                     if x.is_file() and ".part." not in x.name)
+                     if x.is_file() and ".part." not in x.name and "versions" not in x.parts)
     return {"project": proj, "plan": plan, "segments": segments,
             "plan_md": (p["dir"] / "plan.md").read_text(encoding="utf-8") if (p["dir"] / "plan.md").exists() else None,
             "exports": exports}
@@ -189,8 +189,12 @@ def add_comment(pid: str, body: dict = Body(...)):
     from .. import comments
     if not str(body.get("text", "")).strip():
         raise HTTPException(400, "Write a comment first.")
-    return comments.add(proj_mod.resolve_id(pid), body["text"], at=float(body.get("at", 0)),
-                        file=body.get("file", "source"))
+    try:
+        return comments.add(proj_mod.resolve_id(pid), body["text"], at=float(body.get("at", 0)),
+                            file=body.get("file", "source"), author=body.get("author") or "you",
+                            end=body.get("end"), annotation=body.get("annotation"), parent=body.get("parent"))
+    except KeyError as e:
+        _err(e)
 
 
 @app.post("/api/projects/{pid}/comments/{cid}")
@@ -206,6 +210,26 @@ def edit_comment(pid: str, cid: str, body: dict = Body(...)):
         return comments.update(pid, cid, **{k: v for k, v in body.items() if k != "action"})
     except Exception as e:
         _err(e)
+
+
+@app.get("/api/projects/{pid}/assets")
+def list_assets(pid: str):
+    from .. import review
+    return review.assets(proj_mod.resolve_id(pid))
+
+
+@app.post("/api/projects/{pid}/assets/status")
+def asset_status(pid: str, body: dict = Body(...)):
+    from .. import review
+    try:
+        return review.set_status(proj_mod.resolve_id(pid), body["file"], body["status"], body.get("author") or "you")
+    except ValueError as e:
+        _err(e)
+
+
+@app.get("/review/{pid}", response_class=HTMLResponse)
+def review_page(pid: str):
+    return (STATIC / "review.html").read_text(encoding="utf-8")
 
 
 # ------------------------------------------------------------ jobs

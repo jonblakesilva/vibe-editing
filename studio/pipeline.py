@@ -33,6 +33,11 @@ def get_transcript(pid: str, *, engine: str = "local", model: str | None = None,
     t = transcribe.transcribe(Path(proj["source"]["path"]), p["work"], engine=engine,
                               model=model or transcribe.DEFAULT_MODEL, force=force, vocabulary=vocab,
                               on_progress=lambda x: progress("transcribe", x), cancel=cancel)
+    merged = transcribe.merge_split_numbers(t["words"])  # also fixes transcripts cached earlier
+    if len(merged) != len(t["words"]):
+        t["words"] = merged
+        # persist so word numbers (used by manual corrections) match everywhere
+        p["transcript"].write_text(json.dumps(t, indent=1), encoding="utf-8")
     t["vocabulary_fixes"] = transcribe.apply_vocabulary(t, vocab)
     corr = p["work"] / "corrections.json"
     if corr.exists():
@@ -161,7 +166,13 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
     clips = [c for c in plan.get("clips", []) if c.get("enabled", True) and (not ids or c["id"] in ids)]
     results = []
     for k, clip in enumerate(clips):
-        window_cuts = [dict(c) for c in analysis["cuts"] if c["end"] > clip["start"] and c["start"] < clip["end"]]
+        # automatic tight-pace cuts plus every cut the editor added or kept in the plan
+        plan_cuts = [c for c in plan["cuts"] if c.get("enabled", True) and
+                     c["type"] in ("manual", "restart", "repeat", "false_start", "noise")]
+        window_cuts = [dict(c) for c in analysis["cuts"] + plan_cuts
+                       if c["end"] > clip["start"] and c["start"] < clip["end"]]
+        for k in plan.get("keep_overrides", []):
+            window_cuts = plan_mod._subtract(window_cuts, k["start"], k["end"])
         window_cuts += [{"start": 0, "end": clip["start"], "enabled": True},
                         {"start": clip["end"], "end": plan["source"]["duration"], "enabled": True}]
         segs = keep_segments(plan["source"]["duration"], window_cuts, fps=fps)
