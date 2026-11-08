@@ -34,7 +34,9 @@ const FONTS: [string, string, number][] = [
   ['Montserrat', 'fonts/Montserrat-SemiBold.otf', 600],
   ['Montserrat', 'fonts/Montserrat-Medium.otf', 500],
   ['Inter', 'fonts/Inter.ttf', 400],
+  ['DM Serif Display', 'fonts/DMSerifDisplay.ttf', 400],
 ];
+export const serifFamily = '"DM Serif Display", Georgia, serif';
 // Variable fonts cover a weight range in one file.
 const VARIABLE_FONTS: [string, string][] = [['Outfit', 'fonts/Outfit.ttf']];
 
@@ -95,6 +97,9 @@ export const readableOn = (hex: string) => {
   const L = 0.2126 * lin(0) + 0.7152 * lin(2) + 0.0722 * lin(4);
   return L > 0.45 ? '#0B0B0F' : '#FFFFFF';
 };
+
+/** Caption band (share of frame height from the bottom) that graphics must keep clear of. */
+export const captionClearance = (p: BaseProps) => (p.height > p.width ? 0.36 : 0.18);
 
 export const Fill: React.FC<{children: React.ReactNode; style?: React.CSSProperties}> = ({children, style}) => (
   <div style={{position: 'absolute', inset: 0, ...style}}>{children}</div>

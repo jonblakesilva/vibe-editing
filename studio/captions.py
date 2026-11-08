@@ -88,8 +88,118 @@ def layout(width: int, height: int, position: str, avoid: list[dict] | None = No
     return {"alignment": 2, "margin_v": int(height * 0.07), "position": "bottom"}
 
 
+def _rounded_rect(x0: float, y0: float, x1: float, y1: float, r: float) -> str:
+    r = min(r, (x1 - x0) / 2, (y1 - y0) / 2)
+    k = r * 0.45  # bezier handle for a smooth quarter circle
+    f = lambda v: f"{v:.1f}"
+    return (f"m {f(x0 + r)} {f(y0)} l {f(x1 - r)} {f(y0)} "
+            f"b {f(x1 - r + k)} {f(y0)} {f(x1)} {f(y0 + r - k)} {f(x1)} {f(y0 + r)} "
+            f"l {f(x1)} {f(y1 - r)} b {f(x1)} {f(y1 - r + k)} {f(x1 - r + k)} {f(y1)} {f(x1 - r)} {f(y1)} "
+            f"l {f(x0 + r)} {f(y1)} b {f(x0 + r - k)} {f(y1)} {f(x0)} {f(y1 - r + k)} {f(x0)} {f(y1 - r)} "
+            f"l {f(x0)} {f(y0 + r)} b {f(x0)} {f(y0 + r - k)} {f(x0 + r - k)} {f(y0)} {f(x0 + r)} {f(y0)}")
+
+
+def caption_band(width: int, height: int, style: dict) -> dict:
+    """Where captions live (pixels), so graphics can keep clear of them."""
+    base = min(width, height)
+    vertical = height > width
+    # phones: larger type, shorter lines
+    size = int(style.get("size", 50) * (1.35 if vertical else 1.0) * base / 1080 * float(style.get("size_scale", 1.0)))
+    cy = height * (0.735 if vertical else 0.905)
+    if style.get("position") == "top":
+        cy = height * (0.16 if vertical else 0.1)
+    pad_y = size * 0.32
+    return {"cy": cy, "size": size, "top": cy - size * 0.62 - pad_y, "bottom": cy + size * 0.62 + pad_y}
+
+
+def build_premium(words: list[dict], style: dict, *, width: int, height: int, offset: float = 0.0) -> str:
+    """Premium captions: one line per phrase on a rounded brand-color panel sized to the
+    text, the spoken word lit in the brand highlight color, soft fade. No heavy outlines."""
+    from . import fontmetrics
+    band = caption_band(width, height, style)
+    size, cy = band["size"], band["cy"]
+    font = style.get("font", "Outfit Bold")
+    spacing = size * 0.01
+    primary = ass_color(style.get("primary", "#FFFFFF"))
+    hi = ass_color(style.get("highlight") or "#F97316")
+    box = style.get("box_color", "#0F1E4A")
+    box_a = int(round((1 - float(style.get("box_opacity", 0.82))) * 255))
+    pad_x, pad_y, radius = size * 0.55, size * 0.32, size * 0.36
+    max_w = width * (0.80 if height > width else 0.62)
+    upper = bool(style.get("uppercase"))
+    head = [
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {width}", f"PlayResY: {height}",
+        "WrapStyle: 2", "ScaledBorderAndShadow: yes", "YCbCr Matrix: TV.709", "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
+        "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Cap,{font},{size},{primary},{hi},&H00000000,&H00000000,0,0,0,0,100,100,{spacing:.1f},0,1,0,0,5,0,0,0,1",
+        f"Style: Box,Arial,10,{ass_color(box, box_a)},{ass_color(box, box_a)},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1",
+        "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    # phrases sized by measured width so each fits on one line
+    chunks, cur = [], []
+    for idx, w in enumerate(words):
+        trial = " ".join(_clean(x["word"], upper) for x in cur + [w])
+        gap = cur and w["start"] - cur[-1]["end"] > 0.45
+        width_now = fontmetrics.text_width(trial, font, size, spacing) if cur else 0
+        too_wide = width_now > max_w
+        # keep the last one or two words of a sentence with their phrase ("...half the battle.")
+        tail = _left_in_sentence(words, idx) <= 2 and width_now <= max_w * 1.1 and not gap
+        max_words = int(style.get("max_words", 6)) - (2 if height > width else 0)
+        if cur and (gap or too_wide or (len(cur) >= max_words and not tail)):
+            chunks.append(cur)
+            cur = []
+        cur.append(w)
+        if w["word"].endswith(PUNCT_END):
+            chunks.append(cur)
+            cur = []
+    if cur:
+        chunks.append(cur)
+    # never leave a lone word: merge a 1-word phrase into the previous one if it fits
+    merged: list[list[dict]] = []
+    for ch in chunks:
+        if merged and len(ch) == 1 and ch[0]["start"] - merged[-1][-1]["end"] < 0.45:
+            trial = " ".join(_clean(x["word"], upper) for x in merged[-1] + ch)
+            if fontmetrics.text_width(trial, font, size, spacing) <= max_w * 1.15:
+                merged[-1] = merged[-1] + ch
+                continue
+        merged.append(ch)
+    body = []
+    for ci, ch in enumerate(merged):
+        if ci == 0 or merged[ci - 1][-1]["word"].endswith(PUNCT_END):
+            first = ch[0]["word"].lstrip()
+            ch = [dict(ch[0], word=first[:1].upper() + first[1:])] + ch[1:]
+        texts = [_clean(w["word"], upper) for w in ch]
+        start = ch[0]["start"] + offset
+        nxt = merged[ci + 1][0]["start"] + offset if ci + 1 < len(merged) else None
+        end = ch[-1]["end"] + offset + 0.3
+        if nxt is not None:
+            end = min(end, nxt - 0.01)
+        tw = fontmetrics.text_width(" ".join(texts), font, size, spacing)
+        cx = width / 2
+        x0, x1 = cx - tw / 2 - pad_x, cx + tw / 2 + pad_x
+        y0, y1 = cy - size * 0.62 - pad_y, cy + size * 0.62 + pad_y
+        box_tags = r"{\fad(90,70)\pos(0,0)\p1}"
+        body.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Box,,0,0,0,,{box_tags}"
+                    f"{_rounded_rect(x0, y0, x1, y1, radius)}" + r"{\p0}")
+        pos = "{\\pos(%.1f,%.1f)}" % (cx, cy)
+        for wi, w in enumerate(ch):
+            ws = start if wi == 0 else w["start"] + offset
+            we = ch[wi + 1]["start"] + offset if wi + 1 < len(ch) else end
+            if we - ws < 0.02:
+                continue
+            parts = ["{\\c%s}%s{\\c%s}" % (hi, tx, primary) if k == wi else tx for k, tx in enumerate(texts)]
+            tag = r"{\fad(90,0)}" if wi == 0 else (r"{\fad(0,70)}" if wi == len(ch) - 1 else "")
+            body.append(f"Dialogue: 1,{ass_time(ws)},{ass_time(we)},Cap,,0,0,0,,{tag}{pos}" + " ".join(parts))
+    return "\n".join(head + body) + "\n"
+
+
 def build_ass(words: list[dict], style: dict, *, width: int, height: int, avoid: list[dict] | None = None,
               offset: float = 0.0) -> str:
+    if style.get("box") == "rounded":
+        return build_premium(words, style, width=width, height=height, offset=offset)
     base = height if height < width else width  # scale font with the short side
     scale = base / 1080 * float(style.get("size_scale", 1.0))
     size = int(style.get("size", 64) * scale)
@@ -202,7 +312,7 @@ def check_sync(words: list[dict], ass_text: str, tolerance: float = 0.06) -> dic
     starts = sorted(w["start"] for w in words)
     events = []
     for line in ass_text.splitlines():
-        if line.startswith("Dialogue:"):
+        if line.startswith("Dialogue:") and ",Box," not in line:
             f = line.split(",", 9)
             events.append((_parse_ass_time(f[1]), _parse_ass_time(f[2])))
     import bisect

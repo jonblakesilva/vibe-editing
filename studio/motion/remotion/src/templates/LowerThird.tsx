@@ -18,7 +18,8 @@ export const LowerThird: React.FC<LowerThirdProps> = (p) => {
   const nameS = spring({frame: frame - 5, fps, config: {damping: 18, stiffness: 120}});
   const roleS = spring({frame: frame - 10, fps, config: {damping: 18, stiffness: 120}});
   const left = p.width * (vertical ? 0.07 : 0.06);
-  const bottom = p.height * (vertical ? 0.36 : 0.13);
+  // stays above the caption band (captions occupy ~8-14% from the bottom in 16:9, ~27-33% in 9:16)
+  const bottom = p.height * (vertical ? 0.39 : 0.19);
   const nameSize = (vertical ? 58 : 54) * u;
   return (
     <Fill>

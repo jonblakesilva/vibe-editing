@@ -58,7 +58,23 @@ async function load() {
   openAsset(S.assets.find((a) => a.file === want) || S.assets.find((a) => a.kind === 'main') || S.assets[0], params.get('v'));
 }
 
+function renderPicker() {
+  const sel = $('#assetSel');
+  sel.innerHTML = S.assets.map((a, i) => `<option value="${i}">${esc(a.name)}${a.open_comments ? ` (${a.open_comments} open)` : ''}</option>`).join('');
+  sel.value = String(S.assets.findIndex((a) => S.asset && a.file === S.asset.file));
+  $('#prevAsset').disabled = sel.value === '0';
+  $('#nextAsset').disabled = sel.value === String(S.assets.length - 1);
+}
+const goAsset = (delta) => {
+  const i = S.assets.findIndex((a) => a.file === S.asset.file) + delta;
+  if (i >= 0 && i < S.assets.length) openAsset(S.assets[i]);
+};
+$('#assetSel').onchange = () => openAsset(S.assets[+$('#assetSel').value]);
+$('#prevAsset').onclick = () => goAsset(-1);
+$('#nextAsset').onclick = () => goAsset(1);
+
 function renderAssetList() {
+  renderPicker();
   const groups = [['Full videos', S.assets.filter((a) => a.kind === 'main')], ['Shorts', S.assets.filter((a) => a.kind === 'short')]];
   const label = {needs_review: 'Needs review', in_progress: 'In progress', changes_requested: 'Changes requested', approved: 'Approved'};
   $('#assetList').innerHTML = groups.filter(([, l]) => l.length).map(([g, list]) => `<h3>${g}</h3>` + list.map((a) => `
@@ -264,10 +280,11 @@ $('#cText').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#composer').requestSubmit(); }
   if (e.key === 'Escape') { e.target.blur(); }
 });
+const say = (msg, ok = false) => { const m = $('#cMsg'); m.textContent = msg; m.classList.toggle('ok', ok); if (ok) setTimeout(() => { if (m.textContent === msg) m.textContent = ''; }, 3000); };
 $('#composer').onsubmit = async (e) => {
   e.preventDefault();
   const text = $('#cText').value.trim();
-  if (!text) return;
+  if (!text) { say('Type your comment first, then press Comment.'); $('#cText').focus(); return; }
   if (!author) {
     const n = prompt('Your name for comments:', '');
     author = (n && n.trim()) || 'you';
@@ -276,8 +293,11 @@ $('#composer').onsubmit = async (e) => {
   }
   const at = S.inPt ?? vA.currentTime;
   const end = S.outPt != null && S.outPt > at ? S.outPt : null;
-  await api(`/api/projects/${encodeURIComponent(pid)}/comments`, {method: 'POST',
-    body: {text, at, end, file: S.version.file, author, annotation: S.shapes.length ? S.shapes : null}});
+  try {
+    await api(`/api/projects/${encodeURIComponent(pid)}/comments`, {method: 'POST',
+      body: {text, at, end, file: S.version.file, author, annotation: S.shapes.length ? S.shapes : null}});
+  } catch (err) { say(`Couldn't save: ${err.message}`); return; }
+  say(`Comment saved at ${tc(at)}.`, true);
   $('#cText').value = '';
   clearRange(); clearDrawing(); setTool(null);
   await loadComments();
@@ -389,6 +409,8 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'o') { if (S.inPt == null) S.inPt = 0; S.outPt = vA.currentTime > S.inPt ? vA.currentTime : null; showRange(); }
   else if (k === 'c') { e.preventDefault(); $('#cText').focus(); }
   else if (k === 'd') setTool(S.tool ? null : 'pen');
+  else if (k === '[') goAsset(-1);
+  else if (k === ']') goAsset(1);
   else if (k === 'escape') { clearRange(); setTool(null); clearDrawing(); renderComments(); }
 });
 

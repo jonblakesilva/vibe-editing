@@ -230,6 +230,10 @@ def _render(a, quality):
               f"{r['video_duration']:.1f}s  {r['size_mb']} MB" + (f"  failed: {bad}" if bad else ""))
         for n in r.get("notes", []):
             print(f"      note: {n}")
+        if r.get("silent_gaps"):
+            print(f"      check: silence left at {', '.join(f'{s}s ({d}s long)' for s, d in r['silent_gaps'][:5])}")
+        if r.get("qa_sheet"):
+            print(f"      QA frames: {r['qa_sheet']}")
     return 0 if ok else 1
 
 

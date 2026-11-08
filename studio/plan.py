@@ -24,6 +24,16 @@ right now today want show"""
                 .split())
 
 CAPTION_STYLES = {
+    "clean_shadow": {"font": "Outfit SemiBold", "size": 58, "primary": "#FFFFFF", "highlight": None, "outline": 0,
+                     "shadow": 3, "box": False, "uppercase": False, "max_words": 7, "lines": 2, "animation": "fade",
+                     "desc": "Clean white sentence captions with a soft shadow, no box (talking-head favourite)"},
+    "punch": {"font": "Outfit ExtraBold", "size": 84, "primary": "#FFFFFF", "highlight": "brand", "outline": 7,
+              "shadow": 2, "box": False, "uppercase": True, "max_words": 3, "lines": 1, "animation": "pop",
+              "desc": "Punchy 2-3 word captions with brand-color keyword, Hormozi-style energy"},
+    "premium": {"font": "Outfit Bold", "size": 50, "primary": "#FFFFFF", "highlight": "brand", "outline": 0,
+                "shadow": 0, "box": "rounded", "box_color": "brand", "box_opacity": 0.82, "uppercase": False,
+                "max_words": 6, "lines": 1, "animation": "highlight",
+                "desc": "Premium: one clean line on a rounded brand panel, spoken word highlighted"},
     "clean": {"font": "Montserrat ExtraBold", "size": 64, "primary": "#FFFFFF", "highlight": None,
               "outline": 4, "shadow": 2, "box": False, "uppercase": False, "max_words": 7, "lines": 2,
               "animation": "fade", "desc": "Clean sentence captions for educational videos"},
@@ -98,6 +108,16 @@ def default_graphics(analysis: dict, brand: dict, title: str, mode: str) -> list
         for i, ch in enumerate(analysis["chapters"][1:], start=1):
             g.append({"id": f"g_ch{i}", "template": "ChapterCard", "start": ch["start"], "duration": 2.5,
                       "props": {"number": i, "title": ch["title"]}, "placement": "overlay", "enabled": True})
+    rec = brand.get("recurring", {})
+    sents = analysis["sentences"]
+    if rec.get("outro", {}).get("enabled") and sents:
+        end_t = sents[-1]["end"]
+        d = float(rec["outro"].get("duration", 4.5))
+        g.append({"id": "g_outro", "template": rec["outro"].get("template", "EndCard"), "start": round(max(0, end_t - d + 0.6), 2),
+                  "duration": d, "props": {"text": brand.get("cta", {}).get("text") or "Learn more",
+                                           "url": brand.get("cta", {}).get("url", ""), "tagline": brand.get("tagline", "")},
+                  "placement": "overlay", "enabled": True})
+        return g  # the end card carries the call to action
     for i, cta in enumerate(analysis["cta"][-1:]):
         text = brand.get("cta", {}).get("text") or cta["text"]
         g.append({"id": f"g_cta{i + 1}", "template": "CallToAction", "start": cta["start"],
@@ -130,6 +150,8 @@ def build(project: dict, transcript: dict, *, brand: dict, mode: str = "longform
                 "position": brand.get("caption", {}).get("position", "auto"),
                 "size_scale": brand.get("caption", {}).get("size", 1.0),
                 "highlight": brand["colors"]["highlight"] if cap.get("highlight") == "brand" else cap.get("highlight"),
+                "box_color": (brand["colors"].get("navy") or brand["colors"].get("background", "#0F1E4A"))
+                if cap.get("box_color") == "brand" else cap.get("box_color"),
                 "font": brand.get("fonts", {}).get("captions") or cap["font"]})
     title_guess = " ".join(k.title() for k in keywords[:3]) or "Untitled"
     src = project["source"]
@@ -161,7 +183,8 @@ def build(project: dict, transcript: dict, *, brand: dict, mode: str = "longform
         "captions": cap,
         "graphics": default_graphics(analysis, brand, title_guess, mode) if options.get("graphics", True) else [],
         "broll": [],
-        "reframe": {"mode": "auto"},  # auto | largest | split | center (vertical/square crops)
+        "reframe": {"mode": "auto"},
+        "logo_bug": dict(brand.get("recurring", {}).get("logo_bug") or {"enabled": False}),  # auto | largest | split | center (vertical/square crops)
         "audio": {"clean": True, "denoise": "light", "normalize": True,
                   "target_lufs": -14.0 if mode == "longform" else -14.0, "music": None},
         "outputs": [dict(PLATFORM_OUTPUTS[o], name=o) for o in (outputs or (
@@ -340,18 +363,18 @@ def revise(plan: dict, ops: list[dict], request: str = "") -> dict:
         elif kind == "keep":
             plan["keep_overrides"].append({"start": float(op["start"]), "end": float(op["end"])})
         elif kind == "cut":
-            n = len(plan["cuts"]) + 1
+            n = _next_num(plan["cuts"], "c")
             plan["cuts"].append({"id": f"c{n}u", "start": float(op["start"]), "end": float(op["end"]),
                                  "type": "manual", "reason": op.get("reason", "Requested cut"),
                                  "confidence": 1.0, "enabled": True})
             plan["cuts"].sort(key=lambda c: c["start"])
         elif kind == "add_graphic":
-            n = sum(1 for g in plan["graphics"] if g["id"].startswith("g_user")) + 1
+            n = _next_num(plan["graphics"], "g_user")
             plan["graphics"].append({"id": f"g_user{n}", "template": op["template"], "start": float(op["start"]),
                                      "duration": float(op.get("duration", 3)), "props": op.get("props", {}),
                                      "placement": op.get("placement", "overlay"), "enabled": True})
         elif kind == "add_zoom":
-            n = len(plan["zooms"]) + 1
+            n = _next_num(plan["zooms"], "z")
             plan["zooms"].append({"id": f"z{n}u", "start": float(op["start"]), "end": float(op["end"]),
                                   "scale": float(op.get("scale", 1.15)), "kind": op.get("kind", "punch"),
                                   "enabled": True, "reason": "Requested"})
@@ -372,6 +395,13 @@ def revise(plan: dict, ops: list[dict], request: str = "") -> dict:
     return plan
 
 
+def _next_num(items: list[dict], prefix: str) -> int:
+    """Next free number for ids like g_user3 / c12u, so ids never repeat after removals."""
+    import re as _re
+    nums = [int(m.group(1)) for it in items if (m := _re.match(rf"{prefix}(\d+)", it.get("id", "")))]
+    return max(nums, default=0) + 1
+
+
 def parse_request(plan: dict, text: str, at: float | None = None) -> list[dict]:
     """Turn common plain-English revision requests into ops. Anything not understood
     returns [] so Claude (or the user) can express it as explicit ops instead."""
@@ -384,8 +414,12 @@ def parse_request(plan: dict, text: str, at: float | None = None) -> list[dict]:
         ops.append({"op": "set", "path": "captions.size_scale", "value": round(scale * 1.25, 2)})
     elif "caption" in t and any(w in t for w in ("off", "remove", "no captions")):
         ops.append({"op": "set", "path": "captions.enabled", "value": False})
+    aliases = {"hormozi": "punch", "punchy": "punch", "premium": "premium", "shadow": "clean_shadow", "boxed": "minimal"}
+    for word, style in aliases.items():
+        if f"{word} caption" in t or f"captions {word}" in t:
+            t = t + f" {style} caption"
     for style in CAPTION_STYLES:
-        if f"{style} caption" in t or f"captions {style}" in t:
+        if f"{style.replace('_', ' ')} caption" in t or f"{style} caption" in t or f"captions {style}" in t:
             ops += [{"op": "set", "path": f"captions.{k}", "value": v}
                     for k, v in CAPTION_STYLES[style].items() if k != "highlight"]
             ops.append({"op": "set", "path": "captions.style", "value": style})

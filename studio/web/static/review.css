@@ -89,7 +89,7 @@ button[aria-pressed="true"] { border-color: var(--amber); color: var(--amber); }
 
 @media (max-width: 1100px) {
   .rv-body { grid-template-columns: minmax(0, 1fr) 320px; }
-  .rv-assets { display: none; }
+  .rv-assets { display: none; } /* the picker in the top bar switches videos */
 }
 @media (max-width: 760px) {
   body.review { height: auto; overflow: auto; }
@@ -98,3 +98,7 @@ button[aria-pressed="true"] { border-color: var(--amber); color: var(--amber); }
   .rv-comments { border-left: none; border-top: 1px solid var(--line); max-height: none; }
   .rv-tc { min-width: 0; }
 }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+#assetSel { min-width: 0; max-width: 46vw; font-weight: 600; }
+.rv-msg { margin: 0; font-size: 0.85rem; color: var(--amber); min-height: 1.1em; }
+.rv-msg.ok { color: var(--ok); }

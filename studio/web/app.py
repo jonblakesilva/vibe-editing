@@ -33,9 +33,12 @@ def _err(e: Exception, code: int = 400):
     raise HTTPException(code, config.redact(str(e)))
 
 
+NO_CACHE = {"Cache-Control": "no-cache"}  # always serve the latest page code after an update
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return (STATIC / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse((STATIC / "index.html").read_text(encoding="utf-8"), headers=NO_CACHE)
 
 
 @app.get("/static/{name}")
@@ -43,7 +46,7 @@ def static(name: str):
     p = (STATIC / name).resolve()
     if p.parent != STATIC.resolve() or not p.exists():
         raise HTTPException(404)
-    return FileResponse(p)
+    return FileResponse(p, headers=NO_CACHE)
 
 
 # ------------------------------------------------------------ projects
@@ -163,7 +166,8 @@ def render(pid: str, body: dict = Body(default={})):
 def media(pid: str, kind: str, rel: str):
     p = pipeline.paths(pid)
     if kind == "source":
-        f = Path(proj_mod.load(pid)["source"]["path"])
+        proxy = p["work"] / "browser_proxy.mp4"
+        f = proxy if proxy.exists() else Path(proj_mod.load(pid)["source"]["path"])
     elif kind == "exports":
         base = p["exports"].resolve()
         f = (base / rel).resolve()
@@ -229,7 +233,7 @@ def asset_status(pid: str, body: dict = Body(...)):
 
 @app.get("/review/{pid}", response_class=HTMLResponse)
 def review_page(pid: str):
-    return (STATIC / "review.html").read_text(encoding="utf-8")
+    return HTMLResponse((STATIC / "review.html").read_text(encoding="utf-8"), headers=NO_CACHE)
 
 
 # ------------------------------------------------------------ jobs

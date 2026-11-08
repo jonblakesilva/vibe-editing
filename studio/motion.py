@@ -16,7 +16,8 @@ from pathlib import Path
 from . import config
 
 REMOTION_DIR = config.MOTION_DIR / "remotion"
-TEMPLATES = ["KineticTitle", "LowerThird", "ChapterCard", "CallToAction", "Callout", "BrandIntro", "File"]
+TEMPLATES = ["KineticTitle", "EditorialTitle", "LowerThird", "ChapterCard", "CallToAction", "Callout", "BrandIntro",
+             "FloatingCards", "StatPanels", "EndCard", "File"]
 _status: dict = {}
 
 

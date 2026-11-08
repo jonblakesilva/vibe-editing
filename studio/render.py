@@ -131,6 +131,15 @@ def zoom_expr(zooms: list[dict]) -> str | None:
     return "1+" + "+".join(terms)
 
 
+# Screen zones each template occupies (used to decide which graphics may overlap in time).
+ZONES = {
+    "LowerThird": {"bottom-left"}, "CallToAction": {"bottom-center"}, "EndCard": {"full"},
+    "Callout": {"top-right"}, "StatPanels": {"sides"}, "ChapterCard": {"left"},
+    "KineticTitle": {"top"}, "EditorialTitle": {"top"}, "FloatingCards": {"top", "sides"},
+    "BrandIntro": {"full"}, "File": {"full"},
+}
+
+
 def zoom_filter(z_expr: str, fx: float, fy: float, fps: float) -> str:
     """Sub-pixel smooth zoom: the perspective filter samples a shrinking window with bicubic
     interpolation every frame, so slow pushes glide instead of stepping whole pixels
@@ -144,7 +153,8 @@ def zoom_filter(z_expr: str, fx: float, fy: float, fps: float) -> str:
 
 
 def graphics_for_output(plan: dict, tl: Timeline, out_spec: dict, motion_dir: Path, *,
-                        clip_window: tuple[float, float] | None = None) -> list[dict]:
+                        clip_window: tuple[float, float] | None = None, face_x: float | None = None,
+                        face_w: float | None = None) -> list[dict]:
     """Rendered overlay files for this output's resolution, timed on the edited timeline."""
     from . import motion
     items = []
@@ -154,17 +164,56 @@ def graphics_for_output(plan: dict, tl: Timeline, out_spec: dict, motion_dir: Pa
         start = tl.to_edit_nearest(g["start"])
         if clip_window and not (clip_window[0] <= start < clip_window[1]):
             continue
+        if face_x is not None and out_spec["width"] > out_spec["height"] and "faceX" not in g.get("props", {}):
+            g = {**g, "props": {**g.get("props", {}), "faceX": round(face_x, 3), "faceW": round(face_w or 0.2, 3)}}
         path = motion.render_overlay(g, plan, out_spec, motion_dir)
         if path:
-            items.append({"path": path, "start": start, "duration": g["duration"], "id": g["id"],
+            items.append({"path": path, "start": start, "duration": g["duration"], "id": g["id"], "template": g["template"],
                           "placement": g.get("placement", "overlay")})
-    # Cuts can push graphics on top of each other; stagger them so each one reads on its own.
+    # Cuts can push graphics on top of each other. Graphics that share screen space are
+    # staggered so each reads on its own; graphics in different zones may overlap in time.
     items.sort(key=lambda g: g["start"])
-    for prev, cur in zip(items, items[1:]):
-        end = prev["start"] + prev["duration"]
-        if cur["start"] < end + 0.3:
-            cur["start"] = round(end + 0.3, 3)
+    for i, cur in enumerate(items):
+        zc = ZONES.get(cur["template"], {"full"})
+        for prev in items[:i]:
+            zp = ZONES.get(prev["template"], {"full"})
+            if "full" in zc or "full" in zp or zc & zp:
+                end = prev["start"] + prev["duration"]
+                if cur["start"] < end + 0.3 and cur["start"] + cur["duration"] > prev["start"]:
+                    cur["start"] = round(end + 0.3, 3)
     return [g for g in items if g["start"] < tl.duration - 0.5]
+
+
+def contact_sheet(path: Path, times: list[float], out: Path, *, cols: int = 4, width: int = 480) -> Path | None:
+    """One image with frames at the given times (labelled), so every graphic and caption
+    can be checked at a glance from the RENDERED file, not the plan."""
+    info = media.probe(path)
+    times = sorted({round(min(max(0.0, t), info.duration - 0.05), 2) for t in times})[:24]
+    if not times:
+        return None
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tiles = []
+    for i, t in enumerate(times):
+        tile = out.parent / f".{out.stem}_{i:02d}.png"
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{t:.2f}", "-i", str(path), "-frames:v", "1", "-vf",
+                            f"scale={width}:-2,drawbox=x=0:y=0:w=110:h=34:color=black@0.6:t=fill,"
+                            f"drawtext=fontfile='{media.filter_path(config.FONTS_DIR / 'Inter.ttf')}':"
+                            f"text='{t:.1f}s':x=10:y=8:fontsize=20:fontcolor=white", str(tile)],
+                           capture_output=True)  # explicit font file: drawtext + fontconfig crashes on Windows
+        if r.returncode == 0:
+            tiles.append(tile)
+    if not tiles:
+        return None
+    rows = (len(tiles) + cols - 1) // cols
+    args = [a for t in tiles for a in ("-i", str(t))]
+    layout = "|".join(f"{(i % cols)}*w0_{(i // cols)}*h0".replace("0*w0", "0").replace("*w0", "*w0") for i in range(len(tiles)))
+    layout = "|".join(("0" if i % cols == 0 else "+".join(["w0"] * (i % cols))) + "_" +
+                      ("0" if i // cols == 0 else "+".join(["h0"] * (i // cols))) for i in range(len(tiles)))
+    fill = f"xstack=inputs={len(tiles)}:layout={layout}:fill=black" if len(tiles) > 1 else "null"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", *args, "-filter_complex", fill, "-q:v", "3", str(out)], capture_output=True)
+    for t in tiles:
+        t.unlink(missing_ok=True)
+    return out if out.exists() else None
 
 
 def archive_previous(out_path: Path, note: dict | None = None) -> int | None:
@@ -257,6 +306,25 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
         filters.append(f"{v}[g{idx}]overlay=enable='between(t,{st:.3f},{st + g['duration']:.3f})':eof_action=pass:format=auto[vg{idx}]")
         v = f"[vg{idx}]"
         idx += 1
+    # 4b) logo bug: small brand mark in the top corner for the whole video
+    bug = plan.get("logo_bug") or {}
+    if bug.get("enabled"):
+        from . import brand as brand_mod
+        try:
+            b = brand_mod.load(plan.get("brand") if plan.get("brand") not in (None, "default") else None)
+        except FileNotFoundError:
+            b = {}
+        logo = b.get("logo_bug_file") or b.get("logo_mark") or b.get("logo_light") or b.get("logo")  # compact mark w/ shadow
+        if logo and Path(logo).exists():
+            inputs += ["-loop", "1", "-i", logo]
+            lw = int(W * (0.13 if H > W else 0.075)) // 2 * 2
+            op = float(bug.get("opacity", 0.85))
+            mx, my = int(W * 0.035), int(H * (0.05 if H > W else 0.045))
+            x = f"W-w-{mx}" if bug.get("position", "top-right").endswith("right") else str(mx)
+            filters.append(f"[{idx}:v]scale={lw}:-1,format=rgba,colorchannelmixer=aa={op}[logo{idx}]")
+            filters.append(f"{v}[logo{idx}]overlay=x={x}:y={my}:shortest=1:format=auto[vl{idx}]")
+            v = f"[vl{idx}]"
+            idx += 1
     # 5) captions
     cap_info = None
     style = dict(plan["captions"])
@@ -335,6 +403,9 @@ def verify(path: Path, *, expect_w: int, expect_h: int, expect_dur: float | None
         dec = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-v", "error", "-i", str(path), "-f", "null", "-"],
                              capture_output=True, text=True, encoding="utf-8", errors="replace")
         checks["decodes_cleanly"] = dec.returncode == 0 and not dec.stderr.strip()
-    return {"path": str(path), "ok": all(checks.values()), "checks": checks,
+    # dead air left in the edit (reported, not a failure: a deliberate pause can be fine)
+    gaps = [(round(s, 2), round(e - s, 2)) for s, e in media.detect_silences(path, noise_db=-42, min_dur=1.0)
+            if s > 0.3 and e < info.duration - 0.3]
+    return {"path": str(path), "ok": all(checks.values()), "checks": checks, "silent_gaps": gaps,
             "video_duration": round(vd, 3), "audio_duration": round(ad, 3),
             "width": info.width, "height": info.height, "size_mb": round(info.size_bytes / 1e6, 2)}

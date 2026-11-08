@@ -46,6 +46,15 @@ DEFAULT_PROFILE = {
     "vocabulary": [],
     "lower_third": {"name": "", "title": ""},
     "style_references": [],
+    # Assets that appear in every video for this brand (all optional, editable per plan)
+    "recurring": {
+        "logo_bug": {"enabled": False, "position": "top-right", "opacity": 0.85},
+        "intro": {"enabled": False, "template": "BrandIntro", "duration": 1.6},
+        "outro": {"enabled": False, "template": "EndCard", "duration": 4.5},
+        "title_template": "KineticTitle",          # or EditorialTitle (serif, magazine look)
+        "shorts_caption_style": None,               # e.g. "punch" for Hormozi-style Shorts
+        "regime": "organic",                        # organic: restrained graphics; ad: takeovers allowed
+    },
     "complete": False,
 }
 

@@ -6,14 +6,17 @@
 <title>Review - Vibe Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/app.css?v=3">
-<link rel="stylesheet" href="/static/review.css?v=4">
+<link rel="stylesheet" href="/static/app.css?v=6">
+<link rel="stylesheet" href="/static/review.css?v=6">
 </head>
 <body class="review">
 <header class="rv-top">
   <a id="backLink" class="rv-back" href="/">Back to project</a>
   <div class="rv-title">
-    <h1 id="assetName">Loading</h1>
+    <button id="prevAsset" type="button" title="Previous video ([)" aria-label="Previous video">Prev</button>
+    <select id="assetSel" aria-label="Choose a video"></select>
+    <button id="nextAsset" type="button" title="Next video (])" aria-label="Next video">Next</button>
+    <h1 id="assetName" class="sr-only">Loading</h1>
     <select id="versionSel" aria-label="Version"></select>
     <button id="compareBtn" type="button" aria-pressed="false">Compare versions</button>
   </div>
@@ -95,6 +98,7 @@
         </div>
       </div>
       <textarea id="cText" rows="2" placeholder="Leave a comment at this moment (Enter to send, Shift+Enter for a new line)"></textarea>
+      <p id="cMsg" class="rv-msg" role="status"></p>
       <div class="rv-crow">
         <span id="who" class="meta"></span>
         <button class="primary" id="sendBtn">Comment</button>
@@ -102,6 +106,6 @@
     </form>
   </aside>
 </div>
-<script src="/static/review.js?v=5"></script>
+<script src="/static/review.js?v=6"></script>
 </body>
 </html>

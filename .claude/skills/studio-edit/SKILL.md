@@ -70,8 +70,23 @@ smaller/bigger/off/top/bottom, "<style> captions", "remove that zoom" (+ `--at <
 `revise()` docstring: set, toggle, keep, cut, add_graphic, add_zoom, remove, note).
 Revisions edit the existing plan (versioned in `plan_history/`); nothing is re-transcribed.
 
-Motion graphic templates (Remotion): KineticTitle, LowerThird, ChapterCard, CallToAction, Callout,
-BrandIntro. Example: `{"op":"add_graphic","template":"Callout","start":95,"duration":3,
+Motion graphic templates (Remotion): KineticTitle, EditorialTitle (big serif, sits in the open side
+beside the speaker), LowerThird, ChapterCard, CallToAction, Callout, BrandIntro, FloatingCards
+(props.cards [{title|image}], layout "arc" above the head or "sides" for tight framing), StatPanels
+(props.stats [{value,label}], numbers count up), EndCard (logo + tagline + CTA button), File (any
+transparent MOV). Graphics in the same screen zone are staggered automatically; all keep clear of
+the caption band. Never put graphics over the face. Brand "recurring" settings add the logo bug and
+end card to every video automatically; brand "regime" organic = restrained, ad = takeovers allowed.
+
+Caption styles: premium (rounded brand panel, spoken word highlighted - default for The Lead
+Venture), clean_shadow (white, soft shadow, no box), punch (2-3 word Hormozi-style), clean, minimal,
+karaoke, bold. Brand knowledge (offers, case studies, claims, screenshots) for The Lead Venture lives in
+~/VibeStudio/brands/the-lead-venture/knowledge and screenshots/ - only use numbers that appear there
+or in the transcript.
+
+After every render, LOOK at the QA sheet the CLI prints (exports/qa/*_sheet.jpg) before telling the
+user it's ready: check faces are uncovered, text is readable, nothing overlaps captions. Treat each
+review note as a preference for the whole video and say where else you applied it. Example: `{"op":"add_graphic","template":"Callout","start":95,"duration":3,
 "props":{"text":"Reply in 5 minutes","label":"Key point"}}`.
 "Title behind me" (placement "behind") cuts the speaker out with MediaPipe (local) for the seconds the
 title is on screen. Works best with one person and a clean background; hair edges are soft. If the

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -10,7 +11,7 @@ from . import analyze as an
 from . import brand as brand_mod
 from . import plan as plan_mod
 from . import project as proj_mod
-from . import reframe, render, repurpose, shorts, transcribe
+from . import media, reframe, render, repurpose, shorts, transcribe
 from .timeline import Timeline, keep_segments
 
 
@@ -47,6 +48,35 @@ def get_transcript(pid: str, *, engine: str = "local", model: str | None = None,
     return t
 
 
+BROWSER_SAFE = {"h264", "vp8", "vp9", "av1"}
+
+
+def ensure_proxy(pid: str, progress=_noop, cancel=None) -> Path | None:
+    """A small H.264/AAC-stereo copy of the original for in-browser review when the original
+    uses a codec browsers often cannot play (e.g. HEVC from Tella or iPhones) or mono audio.
+    The original file is untouched and still used for every render."""
+    proj = proj_mod.load(pid)
+    src = Path(proj["source"]["path"])
+    out = paths(pid)["work"] / "browser_proxy.mp4"
+    if out.exists():
+        return out
+    info = media.probe(src)
+    mono = False
+    if info.has_audio:
+        r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels",
+                            "-of", "csv=p=0", str(src)], capture_output=True, text=True)
+        mono = r.stdout.strip() == "1"
+    if info.vcodec in BROWSER_SAFE and not mono:
+        return None
+    tmp = out.with_suffix(".part.mp4")
+    media.run_ffmpeg(["-i", str(src), "-vf", "scale=-2:'min(720,ih)'", "-c:v", "libx264", "-preset", "veryfast",
+                      "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "2", "-b:a", "128k",
+                      "-movflags", "+faststart", str(tmp)], duration=info.duration, cancel=cancel,
+                     on_progress=lambda x: progress("browser copy", x))
+    tmp.replace(out)
+    return out
+
+
 def get_faces(pid: str, progress=_noop) -> list[dict]:
     p = paths(pid)
     if p["faces"].exists():
@@ -65,6 +95,7 @@ def make_plan(pid: str, *, mode: str | None = None, outputs: list[str] | None = 
     proj = proj_mod.load(pid)
     mode = mode or proj.get("mode", "longform")
     t = get_transcript(pid, progress=progress, cancel=cancel)
+    ensure_proxy(pid, progress=progress, cancel=cancel)
     br = brand_mod.load(proj.get("brand"))
     opts = dict(options or {})
     plan = plan_mod.build(proj, t, brand=br, mode="longform" if mode == "repurpose" else mode,
@@ -134,12 +165,19 @@ def render_main(pid: str, *, quality: str = "preview", progress=_noop,
     for out in plan["outputs"]:
         name = f"{_safe(plan['summary']['topic'])}_{out['name']}{'_preview' if quality == 'preview' else ''}"
         out_path = p["exports"] / f"{name}.mp4"
-        gfx = render.graphics_for_output(plan, tl, _spec_for(out, quality), p["work"] / "motion")
+        fsum = reframe.summarize(faces)
+        gfx = render.graphics_for_output(plan, tl, _spec_for(out, quality), p["work"] / "motion",
+                                         face_x=fsum["cx"] if fsum else None, face_w=fsum["w"] if fsum else None)
         info = render.finish(cut, plan, tl, words, out, out_path, p["work"], quality=quality, graphics=gfx,
                              faces=faces, progress=progress, cancel=cancel)
         rep = render.verify(out_path, expect_w=info["width"], expect_h=info["height"], expect_dur=tl.duration)
         rep["captions"] = info["captions"]
         rep["notes"] = info.get("notes", [])
+        # QA sheet: frames 0.9 s into every graphic plus one every ~6 s
+        gt = [g["start"] + min(0.9, g["duration"] / 2) for g in gfx] + [i * 6.0 + 1 for i in range(int(tl.duration // 6) + 1)]
+        sheet = render.contact_sheet(out_path, gt, p["exports"] / "qa" / f"{out_path.stem}_sheet.jpg",
+                                     width=480 if out["width"] >= out["height"] else 240)
+        rep["qa_sheet"] = str(sheet) if sheet else None
         results.append(rep)
     if plan["mode"] == "longform" or plan["mode"] == "repurpose":
         _write_extras(p["exports"], plan, tl)
@@ -211,7 +249,7 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
 
 
 def _shorts_caption_style(plan: dict) -> dict:
-    if plan["mode"] == "repurpose" and plan["captions"]["style"] in ("clean", "minimal"):
+    if plan["mode"] == "repurpose" and plan["captions"]["style"] in ("clean", "minimal") and plan["captions"].get("box") != "rounded":
         return {k: v for k, v in plan_mod.CAPTION_STYLES["karaoke"].items() if k != "highlight"} | {"style": "karaoke"}
     return {}
 

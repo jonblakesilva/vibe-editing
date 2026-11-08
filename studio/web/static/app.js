@@ -145,9 +145,13 @@ const currentFile = () => $('#playerSource').value;
 $('#commentForm').onsubmit = async (e) => {
   e.preventDefault();
   const text = $('#commentText').value.trim();
-  if (!text) return;
-  await api(`/api/projects/${state.pid}/comments`, {method: 'POST', body: {text, at: $('#player').currentTime, file: currentFile()}});
+  if (!text) { $('#reviseMsg').textContent = ''; $('#commentText').placeholder = 'Type your note here first'; $('#commentText').focus(); return; }
+  const at = $('#player').currentTime;
+  try {
+    await api(`/api/projects/${state.pid}/comments`, {method: 'POST', body: {text, at, file: currentFile()}});
+  } catch (err) { alert(`Couldn't save the comment: ${err.message}`); return; }
   $('#commentText').value = '';
+  $('#commentText').placeholder = `Saved at ${fmt(at)}. Add another, or open Review videos for drawing and threads.`;
   await loadComments();
   drawStrip();
 };
@@ -277,6 +281,9 @@ function renderStyle() {
   el.innerHTML = `<div class="settings">
     <label><span><input type="checkbox" class="toggle" id="capOn" ${c.enabled ? 'checked' : ''}> Burn captions into the video</span></label>
     <label>Caption style<select id="capStyle">
+      <option value="premium">Premium - one line on a rounded brand panel</option>
+      <option value="clean_shadow">Clean shadow - white text, soft shadow, no box</option>
+      <option value="punch">Punch - big 2-3 word captions (Hormozi style)</option>
       <option value="clean">Clean - sentence captions for teaching</option>
       <option value="minimal">Minimal - small boxed text</option>
       <option value="karaoke">Highlight - current word lights up</option>
