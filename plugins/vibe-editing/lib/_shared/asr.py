@@ -7,7 +7,24 @@ from __future__ import annotations
 import os
 import json
 import hashlib
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows: the same non-blocking exclusive lock via msvcrt
+    import msvcrt as _msvcrt
+    import types as _types
+
+    def _flock(target, op):
+        fd = target if isinstance(target, int) else target.fileno()
+        os.lseek(fd, 0, os.SEEK_SET)  # lock the same first byte every time
+        mode = _msvcrt.LK_UNLCK if op & 8 else (_msvcrt.LK_NBLCK if op & 4 else _msvcrt.LK_LOCK)
+        try:
+            _msvcrt.locking(fd, mode, 1)
+        except OSError as exc:
+            if op & 4 and not op & 8:
+                raise BlockingIOError(*exc.args) from None
+            raise
+
+    fcntl = _types.SimpleNamespace(LOCK_SH=1, LOCK_EX=2, LOCK_NB=4, LOCK_UN=8, flock=_flock)
 import re
 import subprocess
 import tempfile
@@ -117,7 +134,7 @@ def _assemblyai(wav: str, key: str, prompt: str | None,
              "key_fingerprint": hashlib.sha256(key.encode()).hexdigest()}
     if state_path is None:
         digest = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
-        state_path = Path(os.environ.get("VIBE_ASR_CACHE", str(Path.home() / ".cache/vibe-editing/asr"))) / 'jobs' / (digest + '.json')
+        state_path = Path(os.environ.get("VIBE_ASR_CACHE") or str(Path.home() / ".cache/vibe-editing/asr")) / 'jobs' / (digest + '.json')
     state_path = Path(state_path)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     # Prevent two processes from submitting the same source concurrently.
@@ -240,7 +257,7 @@ def _cache_path(clip_path: str, profile: str, prompt=None, keyterms=None) -> Pat
                 'keyterms': keyterms, 'assemblyai_models': AAI_MODELS,
                 'groq_model': GROQ_MODEL, 'mlx_model': MLX_MODEL}
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-    directory = Path(os.environ.get('VIBE_ASR_CACHE', str(Path.home() / '.cache/vibe-editing/asr')))
+    directory = Path(os.environ.get('VIBE_ASR_CACHE') or str(Path.home() / '.cache/vibe-editing/asr'))
     directory.mkdir(parents=True, exist_ok=True)
     return directory / (digest + '.json')
 

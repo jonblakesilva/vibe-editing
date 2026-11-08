@@ -34,8 +34,10 @@ class SetupTests(unittest.TestCase):
         onboard.save_field('ASSEMBLYAI_API_KEY', 'test-aai-secret')
         onboard.save_field('GEMINI_API_KEY', 'test-gemini-secret')
         self.assertEqual(credentials.read_values(self.keys)['ASSEMBLYAI_API_KEY'], 'test-aai-secret')
-        self.assertEqual(self.keys.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(self.keys.parent.stat().st_mode & 0o777, 0o700)
+        if os.name != 'nt':  # Windows has no Unix permission bits
+            self.assertEqual(self.keys.stat().st_mode & 0o777, 0o600)
+        if os.name != 'nt':  # Windows has no Unix permission bits
+            self.assertEqual(self.keys.parent.stat().st_mode & 0o777, 0o700)
 
     def test_runtime_precedence(self):
         onboard.save_field('ASSEMBLYAI_API_KEY', 'private')

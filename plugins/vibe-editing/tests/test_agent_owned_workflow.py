@@ -78,7 +78,8 @@ class AgentOwnedTests(unittest.TestCase):
         with patch.object(onboard, 'KEYS_FILE', path):
             onboard.save_field('ASSEMBLYAI_API_KEY', 'dummy-media-key')
         self.assertIn('ANTHROPIC_API_KEY=existing-legacy-value', path.read_text())
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        if os.name != 'nt':  # Windows has no Unix permission bits
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_wrapper_directors_use_the_same_agent_artifact_contract(self):
         helper = load('agent_style_helper_test', ROOT / 'skills/caption-clips/scripts/agent_style.py')

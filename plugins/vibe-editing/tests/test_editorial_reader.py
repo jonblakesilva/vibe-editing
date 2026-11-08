@@ -1,3 +1,4 @@
+import os
 """The active agent retrieves verified documents with a team read credential, not a model key."""
 import hashlib
 import json
@@ -66,7 +67,8 @@ class EditorialReaderTests(unittest.TestCase):
         self.assertEqual(request.get_header('Authorization'), 'Bearer ' + 'dummy-test-token-' * 4)
         self.assertNotIn('dummy-test-token', request.full_url)
         self.assertNotIn('dummy-test-token', json.dumps(result))
-        self.assertEqual((self.root / 'context.json').stat().st_mode & 0o777, 0o600)
+        if os.name != 'nt':  # Windows has no Unix permission bits
+            self.assertEqual((self.root / 'context.json').stat().st_mode & 0o777, 0o600)
 
     def test_wrong_project_or_changed_document_is_rejected(self):
         bad_project = {**self.context, 'project_ref': 'other'}

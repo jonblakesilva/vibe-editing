@@ -24,7 +24,24 @@ Use it as a context manager around ffmpeg calls:
 
 Inside parallel.run_commands(kind="encode") it's already wired — most skills get it free.
 """
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows: the same non-blocking exclusive lock via msvcrt
+    import msvcrt as _msvcrt
+    import types as _types
+
+    def _flock(target, op):
+        fd = target if isinstance(target, int) else target.fileno()
+        os.lseek(fd, 0, os.SEEK_SET)  # lock the same first byte every time
+        mode = _msvcrt.LK_UNLCK if op & 8 else (_msvcrt.LK_NBLCK if op & 4 else _msvcrt.LK_LOCK)
+        try:
+            _msvcrt.locking(fd, mode, 1)
+        except OSError as exc:
+            if op & 4 and not op & 8:
+                raise BlockingIOError(*exc.args) from None
+            raise
+
+    fcntl = _types.SimpleNamespace(LOCK_SH=1, LOCK_EX=2, LOCK_NB=4, LOCK_UN=8, flock=_flock)
 import os
 import time
 from contextlib import contextmanager

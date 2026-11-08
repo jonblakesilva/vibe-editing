@@ -55,7 +55,8 @@ class AsrReviewTests(unittest.TestCase):
                 self.transcribe()
             self.assertEqual(post.call_count, 2)
         self.assertEqual(json.loads(self.receipt.read_text())['transcript_id'], 'job-1')
-        self.assertEqual(self.receipt.stat().st_mode & 0o777, 0o600)
+        if os.name != 'nt':  # Windows has no Unix permission bits
+            self.assertEqual(self.receipt.stat().st_mode & 0o777, 0o600)
         self.assertNotIn('dummy-key', self.receipt.read_text())
         with patch('httpx.post') as post, patch('httpx.get', return_value=response(self.native)) as get:
             result = self.transcribe()
@@ -141,12 +142,12 @@ class ListenerReviewTests(unittest.TestCase):
     def test_plugin_artifact_contains_a_reachable_onboarding_graph(self):
         import re
         skill = ROOT / 'skills/edit/SKILL.md'
-        targets = re.findall(r'\]\(([^)]+)\)', skill.read_text())
+        targets = re.findall(r'\]\(([^)]+)\)', skill.read_text(encoding='utf-8'))
         onboarding = next((skill.parent / target).resolve() for target in targets if target.endswith('/docs/ONBOARDING.md'))
         self.assertTrue(onboarding.is_file())
         self.assertTrue(onboarding.is_relative_to(ROOT))
         for document in (onboarding, ROOT / 'docs/CONNECTIONS.md', ROOT / 'docs/INSTALL.md'):
-            for target in re.findall(r'\]\(([^)]+)\)', document.read_text()):
+            for target in re.findall(r'\]\(([^)]+)\)', document.read_text(encoding='utf-8')):
                 if '://' in target or target.startswith('#'):
                     continue
                 path = (document.parent / target.split('#')[0]).resolve()
