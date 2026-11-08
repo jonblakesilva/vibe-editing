@@ -138,6 +138,9 @@ def revise(pid: str, *, request: str = "", ops: list[dict] | None = None, at: fl
     ops = ops if ops is not None else plan_mod.parse_request(plan, request, at)
     if not ops:
         return plan, []
+    if any(o.get("op") == "pace" for o in ops):  # pace needs the transcript to rebuild pause cuts
+        words = get_transcript(pid)["words"]
+        ops = [dict(o, _words=words) if o.get("op") == "pace" else o for o in ops]
     plan = plan_mod.revise(plan, ops, request)
     plan_mod.save(plan, p["plan"])
     return plan, ops
@@ -181,6 +184,10 @@ def render_main(pid: str, *, quality: str = "preview", progress=_noop,
         sheet = render.contact_sheet(out_path, gt, p["exports"] / "qa" / f"{out_path.stem}_sheet.jpg",
                                      width=480 if out["width"] >= out["height"] else 240)
         rep["qa_sheet"] = str(sheet) if sheet else None
+        if quality == "preview" and out == plan["outputs"][0] and tl.duration < 15 * 60:
+            progress("listen-back check", 0.0)
+            rep["listen_issues"] = listen_check_isolated(out_path, p["work"])
+            progress("listen-back check", 1.0)
         results.append(rep)
     if plan["mode"] == "longform" or plan["mode"] == "repurpose":
         _write_extras(p["exports"], plan, tl)
@@ -192,6 +199,51 @@ def render_main(pid: str, *, quality: str = "preview", progress=_noop,
     proj["status"] = "rendered" if quality == "final" else "previewed"
     proj_mod.save(proj)
     return results
+
+
+def listen_check(out_path: Path, work: Path) -> list[dict]:
+    """Listen back to the RENDERED video: transcribe it and flag leftover restarts, repeats,
+    false starts and filler words, with their times in the edited video. Catches stumbles the
+    first transcription merged into a single long word."""
+    from . import analyze as an_mod
+    heard = transcribe.transcribe(out_path, work / "_listen" / out_path.stem, model=transcribe.DEFAULT_MODEL)
+    words = heard["words"]
+    sents = an_mod.sentences(words, gap=0.6)
+    issues = []
+    for c in an_mod.find_restarts_and_repeats(words, sents) + an_mod.find_fillers(words, aggressive=False):
+        issues.append({"at": round(c["start"], 2), "end": round(c["end"], 2), "type": c["type"],
+                       "text": c.get("text", ""), "reason": c["reason"]})
+    # a phrase that starts, stops and restarts within a few words ("one business that we.. one business we")
+    toks = [an_mod.norm(w["word"]) for w in words]
+    for i in range(len(toks) - 3):
+        for j in range(i + 2, min(i + 9, len(toks) - 1)):
+            if toks[i] and toks[i:i + 2] == toks[j:j + 2] and toks[i] not in ("the", "and", "a", "to", "of", "i"):
+                issues.append({"at": round(words[i]["start"], 2), "end": round(words[j]["start"], 2), "type": "restart",
+                               "text": " ".join(w["word"] for w in words[i:j + 2]),
+                               "reason": f'"{words[i]["word"]} {words[i + 1]["word"]}" said twice close together'})
+                break
+    seen, out = set(), []
+    for it in sorted(issues, key=lambda x: x["at"]):
+        key = round(it["at"])
+        if key not in seen:
+            seen.add(key)
+            out.append(it)
+    return out
+
+
+def listen_check_isolated(out_path: Path, work: Path, timeout: int = 900) -> list[dict] | None:
+    """Run listen_check in a separate process. Inside a render the speaker-mask library and the
+    transcriber can contend for threads and stall; a fresh process avoids that."""
+    import sys
+    code = ("import json,sys; from pathlib import Path; from studio import pipeline; "
+            "print('@@'+json.dumps(pipeline.listen_check(Path(sys.argv[1]), Path(sys.argv[2]))))")
+    try:
+        r = subprocess.run([sys.executable, "-c", code, str(out_path), str(work)], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=timeout, cwd=str(Path(__file__).resolve().parent.parent))
+    except subprocess.TimeoutExpired:
+        return None
+    line = next((l for l in r.stdout.splitlines() if l.startswith("@@")), None)
+    return json.loads(line[2:]) if line else None
 
 
 def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None = None, clean_copy: bool = True,

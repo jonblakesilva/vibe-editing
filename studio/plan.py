@@ -191,7 +191,7 @@ def build(project: dict, transcript: dict, *, brand: dict, mode: str = "longform
         "captions": cap,
         "graphics": default_graphics(analysis, brand, title_guess, mode) if options.get("graphics", True) else [],
         "broll": [],
-        "reframe": {"mode": "auto"},
+        "reframe": {"mode": "auto", "vertical_zoom": brand.get("recurring", {}).get("vertical_zoom", "medium")},
         "logo_bug": dict(brand.get("recurring", {}).get("logo_bug") or {"enabled": False}),  # auto | largest | split | center (vertical/square crops)
         "audio": {"clean": True, "denoise": "light", "normalize": True, "target_lufs": -14.0,
                   "music": _brand_music(brand),
@@ -388,6 +388,17 @@ def revise(plan: dict, ops: list[dict], request: str = "") -> dict:
             plan["zooms"].append({"id": f"z{n}u", "start": float(op["start"]), "end": float(op["end"]),
                                   "scale": float(op.get("scale", 1.15)), "kind": op.get("kind", "punch"),
                                   "enabled": True, "reason": "Requested"})
+        elif kind == "pace":  # rebuild every pause cut at a new pace (keeps all other cuts and choices)
+            pace_rules = {"relaxed": (1.2, 0.6), "natural": (0.8, 0.4), "tight": (0.5, 0.22), "snappy": (0.35, 0.15)}
+            max_p, keep_p = pace_rules.get(op["value"], pace_rules["tight"])
+            words = op.get("_words") or []
+            plan["cuts"] = [c for c in plan["cuts"] if c["type"] != "pause"]
+            n0 = _next_num(plan["cuts"], "c")
+            for k, c in enumerate(an.find_pauses(words, max_pause=max_p, keep_pause=keep_p)):
+                plan["cuts"].append({**c, "id": f"c{n0 + k}p", "enabled": True})
+            plan["cuts"].sort(key=lambda c: c["start"])
+            plan["pace"] = op["value"]
+            op = {k: v for k, v in op.items() if k != "_words"}
         elif kind == "props":  # merge props into one item by id (safe even after removals)
             hit = find_item(plan, op["id"])
             if not hit:
@@ -479,6 +490,9 @@ def parse_request(plan: dict, text: str, at: float | None = None) -> list[dict]:
         hook = plan["summary"].get("suggested_hook")
         if hook and not any(z["start"] == hook["start"] for z in plan["zooms"]):
             ops.append({"op": "add_zoom", "start": hook["start"], "end": hook["end"], "scale": 1.15})
+    if any(k in t for k in ("dead air", "tighter", "too slow", "faster pace", "remove pauses", "cut the pauses",
+                            "cut the silence", "remove silence", "less pause", "snappier", "speed it up")):
+        ops.append({"op": "pace", "value": "snappy" if any(k in t for k in ("snappier", "very tight", "faster pace")) else "tight"})
     if "no music" in t or "remove music" in t:
         ops.append({"op": "set", "path": "audio.music", "value": None})
     return ops

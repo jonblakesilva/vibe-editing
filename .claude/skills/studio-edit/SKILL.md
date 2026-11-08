@@ -84,6 +84,15 @@ karaoke, bold. Brand knowledge (offers, case studies, claims, screenshots) for T
 ~/VibeStudio/brands/the-lead-venture/knowledge and screenshots/ - only use numbers that appear there
 or in the transcript.
 
+After every preview, read the "listen:" lines the CLI prints: the rendered video is transcribed again
+and leftover restarts/repeats/fillers are flagged with their EDITED time. The first transcription can
+merge a stumble into one long word (e.g. a 2-second "work"), so this second listen catches what the
+plan missed. Map each flagged time back to the original with the plan timeline and add a cut.
+"Remove dead air" / "tighter" requests rebuild every pause at a tighter pace ({"op":"pace","value":"tight"}).
+Vertical framing: plan.reframe.vertical_zoom = tight | medium | wide (medium/wide = zoomed-out crop on a
+blurred fill). Requests the dashboard can't apply are saved as notes - work through them with
+`studio comments <p>`.
+
 After every render, LOOK at the QA sheet the CLI prints (exports/qa/*_sheet.jpg) before telling the
 user it's ready: check faces are uncovered, text is readable, nothing overlaps captions. Treat each
 review note as a preference for the whole video and say where else you applied it. Example: `{"op":"add_graphic","template":"Callout","start":95,"duration":3,

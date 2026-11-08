@@ -284,6 +284,25 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
         filters.append(reframe.split_filter(v, people, src_w=info.width, src_h=info.height, out_w=W, out_h=H) + "[vc]")
         v = "[vc]"
         face_sum = None  # captions sit on the seam area below; zooms stay centered
+    elif out_aspect < 0.8 and src_aspect > 1 and (plan.get("reframe") or {}).get("vertical_zoom", "tight") in ("medium", "wide"):
+        # zoomed-out vertical: a wider crop (4:5 or 1:1) of the speaker sits in the frame, and a
+        # blurred, darkened copy of the same shot fills above and below (no black bars)
+        crop_aspect = 0.8 if plan["reframe"]["vertical_zoom"] == "medium" else 1.0
+        crop_w = int(round(min(info.width, info.height * crop_aspect) / 2) * 2)
+        keys = reframe.camera_path(faces if mode != "center" else [], info.duration, src_w=info.width, src_h=info.height,
+                                   out_aspect=crop_w / info.height)
+        fg_h = int(round(W / crop_w * info.height / 2) * 2)
+        top = int(max(0, (H - fg_h) * 0.40))
+        bg_w = int(round(info.height * out_aspect / 2) * 2)
+        bkeys = reframe.camera_path(faces if mode != "center" else [], info.duration, src_w=info.width, src_h=info.height,
+                                    out_aspect=out_aspect)
+        filters.append(f"{v}split=2[zfg][zbg]")
+        filters.append(f"[zfg]crop=w={crop_w}:h={info.height}:x='{reframe.crop_x_expr(keys)}':y=0,scale={W}:{fg_h}:flags=lanczos[zf]")
+        filters.append(f"[zbg]crop=w={bg_w}:h={info.height}:x='{reframe.crop_x_expr(bkeys)}':y=0,scale={W // 4}:{H // 4},"
+                       f"boxblur=10:3,scale={W}:{H},eq=brightness=-0.12:saturation=0.85[zb]")
+        filters.append(f"[zb][zf]overlay=x=0:y={top}[vc]")
+        v = "[vc]"
+        out_aspect = src_aspect  # downstream: picture already composed at W x H
     elif abs(out_aspect - src_aspect) > 0.01:
         if out_aspect < src_aspect:
             crop_w = int(round(info.height * out_aspect / 2) * 2)
@@ -327,7 +346,8 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
     # 4) motion graphics overlays (transparent renders). "behind" graphics are composited
     #    after this pass, between the background and the speaker (see mask.py).
     from . import mask as mask_mod
-    behind = [g for g in graphics or [] if g.get("placement") == "behind" and mask_mod.available()]
+    # vertical frames have no room beside the speaker: "behind" graphics go in front there
+    behind = [g for g in graphics or [] if g.get("placement") == "behind" and mask_mod.available() and W > H]
     for g in [g for g in graphics or [] if g not in behind]:
         inputs += ["-i", str(g["path"])]
         st = g["start"]

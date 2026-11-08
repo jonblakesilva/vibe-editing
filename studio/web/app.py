@@ -194,7 +194,13 @@ def revise(pid: str, body: dict = Body(...)):
         plan, ops = pipeline.revise(pid, request=body.get("request", ""), ops=body.get("ops"), at=body.get("at"))
     except Exception as e:
         _err(e)
-    return {"applied": ops, "version": plan["version"], "understood": bool(ops)}
+    note = None
+    if not ops and body.get("request"):
+        # not something the plan can change by itself: keep it as a note for Claude instead of losing it
+        from .. import comments
+        note = comments.add(proj_mod.resolve_id(pid), body["request"], at=float(body.get("at") or 0),
+                            file=body.get("file") or "source", author=body.get("author") or "you")
+    return {"applied": ops, "version": plan["version"], "understood": bool(ops), "saved_note": bool(note)}
 
 
 @app.post("/api/projects/{pid}/approve")

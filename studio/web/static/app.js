@@ -375,6 +375,10 @@ function renderStyle() {
     <div class="setting"><span>Caption size</span><input type="range" id="capSize" min="0.6" max="1.6" step="0.05" value="${c.size_scale ?? 1}"></div>
     <div class="setting"><span>Position</span><select id="capPos"><option value="auto">Automatic</option><option value="bottom">Bottom</option><option value="top">Top</option></select></div>
     <div class="setting"><span>Highlight color</span><input type="color" id="capColor" value="${esc(c.highlight || '#F97316')}" style="width:3rem;height:2rem;padding:2px"></div>
+    <h3>Vertical framing (Shorts)</h3>
+    <div class="setting"><span>How close the camera feels</span><select id="vzoom">
+      <option value="tight">Tight - face fills the screen</option><option value="medium">Medium - zoomed out a bit</option>
+      <option value="wide">Wide - more of the room</option></select></div>
     <h3>Brand</h3>
     <div class="setting"><span>Logo in the corner</span><input type="checkbox" class="switch" id="bugOn" ${bug.enabled ? 'checked' : ''}></div>
     <h3>Music</h3>
@@ -391,6 +395,8 @@ function renderStyle() {
     <div class="setting"><span>Zooms (${plan.zooms.filter((z) => z.enabled !== false).length} of ${plan.zooms.length} on)</span>
       <input type="checkbox" class="switch" id="zoomAll" ${plan.zooms.some((z) => z.enabled !== false) ? 'checked' : ''} ${plan.zooms.length ? '' : 'disabled'}></div>`;
   $('#capPos').value = c.position || 'auto';
+  $('#vzoom').value = (plan.reframe || {}).vertical_zoom || 'tight';
+  $('#vzoom').onchange = (e) => revise({ops: [{op: 'set', path: 'reframe', value: {...(plan.reframe || {mode: 'auto'}), vertical_zoom: e.target.value}}], request: 'Vertical framing'});
   const set = (path, value, label) => revise({ops: [{op: 'set', path, value}], request: label});
   el.querySelectorAll('[data-style]').forEach((b) => (b.onclick = () => revise({request: `${b.dataset.style.replace('_', ' ')} captions`})));
   $('#capOn').onchange = (e) => set('captions.enabled', e.target.checked, 'Captions on/off');
@@ -436,7 +442,8 @@ function renderFiles() {
 async function revise(body) {
   try {
     const r = await api(`/api/projects/${encodeURIComponent(S.pid)}/revise`, {method: 'POST', body});
-    say($('#askMsg'), r.understood ? 'Updated. Make a new preview to see it.' : 'I could not turn that into a change here. Ask Claude in VS Code, or try wording like "make the captions bigger".', r.understood ? 'ok' : 'err');
+    say($('#askMsg'), r.understood ? 'Updated. Make a new preview to see it.'
+      : 'Saved as a note for your editor (Claude). Ask Claude to "work through my notes" and it will be applied.', 'ok');
     await refresh();
   } catch (err) { say($('#askMsg'), err.message, 'err'); }
 }
@@ -444,7 +451,7 @@ $('#askForm').onsubmit = (e) => {
   e.preventDefault();
   const text = $('#askText').value.trim();
   if (!text) { say($('#askMsg'), 'Type what you want changed first.', 'err'); return; }
-  revise({request: text, at: srcTime()});
+  revise({request: text, at: $('#player').currentTime, file: S.source});
   $('#askText').value = '';
 };
 

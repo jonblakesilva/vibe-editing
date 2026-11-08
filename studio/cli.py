@@ -232,6 +232,8 @@ def _render(a, quality):
             print(f"      note: {n}")
         if r.get("silent_gaps"):
             print(f"      check: silence left at {', '.join(f'{s}s ({d}s long)' for s, d in r['silent_gaps'][:5])}")
+        for it in r.get("listen_issues") or []:
+            print(f"      listen: possible {it['type'].replace('_', ' ')} at {it['at']:.1f}s - {it['text'][:70]}")
         if r.get("qa_sheet"):
             print(f"      QA frames: {r['qa_sheet']}")
     return 0 if ok else 1
