@@ -1,5 +1,12 @@
 # Vibe Editing — how to run this project
 
+## Vibe Studio (default for this fork)
+For long-form edits, Tella recordings, "edit this video", "make N Shorts from this", brand setup,
+plan revisions or the dashboard, follow `.claude/skills/studio-edit/SKILL.md` and run
+`.venv\Scripts\python -m studio ...` (Windows) / `.venv/bin/python -m studio ...`. It works on
+Windows and needs no paid API. Use the original `/edit` short-form pipeline below only when the user
+asks for it by name. Never render a final before the user approves the plan; never publish.
+
 This folder is **Vibe Editing**: a pipeline that turns a long video into finished, captioned,
 face-tracked **vertical clips**, in the creator's own brand. It's built to be run by
 **non-technical creators** — so when you help someone here, do the work yourself, never make them

@@ -5,7 +5,7 @@ Checks what's already on this machine and prints the EXACT commands to install O
 what's missing (check-then-install). Run it, install the gaps it lists, run it again,
 repeat until it says READY. Exit 0 = ready, 1 = something to install.
 """
-import shutil, subprocess, os, sys
+import shutil, subprocess, os, sys, platform
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -80,6 +80,11 @@ if crit_ok:
     sys.exit(0)
 
 print(f"  {R}NOT READY{X} — install ONLY what's missing:\n")
+WINGET = {"ffmpeg": "Gyan.FFmpeg", "yt-dlp": "yt-dlp.yt-dlp", "tesseract": "UB-Mannheim.TesseractOCR", "rclone": "Rclone.Rclone"}
+if brew_need and platform.system() == "Windows":
+    for tool in dict.fromkeys(brew_need):
+        print(f"    winget install --id {WINGET.get(tool, tool)} -e")
+    brew_need = []
 if brew_need:
     if not has("brew"):
         print("    # Homebrew first: /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"")
@@ -89,5 +94,6 @@ if pip_need:
     print(f"        && pip install {' '.join(dict.fromkeys(pip_need))}")
 for n in notes:
     print(f"    ! {n}")
-print(f"\n  Then re-check:  python3 {Path(__file__).name}\n")
+print(f"\n  Then re-check:  python3 {Path(__file__).name}")
+print("  Vibe Studio (long-form, Shorts, dashboard) has its own tested check:  python -m studio doctor\n")
 sys.exit(1)

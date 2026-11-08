@@ -16,7 +16,7 @@ from pathlib import Path
 from . import config
 
 REMOTION_DIR = config.MOTION_DIR / "remotion"
-TEMPLATES = ["KineticTitle", "LowerThird", "ChapterCard", "CallToAction", "Callout", "BrandIntro"]
+TEMPLATES = ["KineticTitle", "LowerThird", "ChapterCard", "CallToAction", "Callout", "BrandIntro", "File"]
 _status: dict = {}
 
 
@@ -38,6 +38,12 @@ def brand_props(plan: dict) -> dict:
 
 
 def render_overlay(graphic: dict, plan: dict, out_spec: dict, cache_dir: Path) -> Path | None:
+    if graphic["template"] == "File":
+        # A ready-made transparent overlay (e.g. rendered with HyperFrames: --format mov).
+        p = Path(graphic.get("props", {}).get("path", "")).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(f"Overlay file not found: {p}")
+        return p
     if graphic["template"] not in TEMPLATES:
         raise ValueError(f"Unknown motion template {graphic['template']}. Available: {', '.join(TEMPLATES)}")
     if not available():
