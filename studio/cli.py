@@ -48,6 +48,8 @@ def cmd_doctor(a):
 def cmd_import(a):
     src = Path(a.source).expanduser()
     camera = a.camera
+    if getattr(a, "screencam", False) and src.is_dir():
+        return _import_screencam(a, src)
     if src.is_dir():
         vids = proj_mod.find_videos(src)
         if not vids:
@@ -62,6 +64,38 @@ def cmd_import(a):
     print(json.dumps({"project": proj["id"], "duration_s": round(proj["source"]["duration"], 1),
                       "resolution": f"{proj['source']['width']}x{proj['source']['height']}",
                       "folder": str(proj_mod.project_dir(proj["id"]))}, indent=2))
+    return 0
+
+
+def _parse_ranges(text: str | None) -> list[list[float]]:
+    out = []
+    for part in (text or "").split(","):
+        if "-" in part:
+            a_, b_ = part.split("-", 1)
+            out.append([float(a_), 1e9 if b_.strip() in ("end", "") else float(b_)])
+    return out
+
+
+def _import_screencam(a, folder: Path) -> int:
+    """Tella raw export with Camera.mp4 + Screen.mp4 per clip: build the landscape and vertical
+    layout masters (originals untouched), then register the landscape one as the project source."""
+    from . import brand as brand_mod, compose
+    takes = compose.find_takes(folder)
+    if not takes:
+        print(f"No Camera.mp4 + Screen.mp4 clip folders found in {folder}")
+        return 1
+    br = brand_mod.load(a.brand)
+    cam = _parse_ranges(a.cam)
+    out = folder / "layouts"
+    print(f"Building screen + camera layouts from {len(takes)} take(s)...")
+    land, vert = compose.build_masters(takes, out, cam_ranges=cam,
+                                       bg=br["colors"].get("navy") or br["colors"].get("background", "#0F1E4A"),
+                                       accent=br["colors"].get("highlight", "#F97316"),
+                                       progress=lambda x: print(f"  layouts {x * 100:5.1f}%", end=chr(13), flush=True))
+    print()
+    proj = proj_mod.create(land, name=a.name, brand=a.brand, mode=a.mode, vertical=vert, cam_ranges=cam)
+    print(json.dumps({"project": proj["id"], "duration_s": round(proj["source"]["duration"], 1),
+                      "layout": "screencam", "folder": str(proj_mod.project_dir(proj["id"]))}, indent=2))
     return 0
 
 
@@ -371,6 +405,10 @@ def main(argv=None):
         s.add_argument("--mode", default="longform", choices=["longform", "shorts", "repurpose"])
         s.add_argument("--copy", action="store_true", help="copy the original into the project folder")
         s.add_argument("--camera", help="separate camera recording (optional)")
+        if name == "import":
+            s.add_argument("--screencam", action="store_true",
+                           help="Tella folder with Camera.mp4 + Screen.mp4 per clip: screen + camera layouts")
+            s.add_argument("--cam", help='full-screen camera ranges in seconds, e.g. "0-12.5,340-end"')
         s.set_defaults(fn=fn)
 
     s = sub.add_parser("fetch", help="download a direct link (e.g. Tella export URL) and import it")

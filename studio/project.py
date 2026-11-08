@@ -24,7 +24,8 @@ def project_dir(pid: str) -> Path:
 
 
 def create(source: str | Path, *, name: str | None = None, brand: str | None = None,
-           mode: str = "longform", copy: bool = False, camera: str | Path | None = None) -> dict:
+           mode: str = "longform", copy: bool = False, camera: str | Path | None = None,
+           vertical: str | Path | None = None, cam_ranges: list | None = None) -> dict:
     """Register a recording. `camera` is an optional separate camera track (e.g. a Tella
     camera file) kept alongside the screen recording for future layouts."""
     config.ensure_dirs()
@@ -47,7 +48,9 @@ def create(source: str | Path, *, name: str | None = None, brand: str | None = N
         "original": str(src),
         "source": {"path": str(source_path), "duration": info.duration, "width": info.width,
                    "height": info.height, "fps": round(info.fps, 3) if info.fps else 30.0,
-                   "size_bytes": info.size_bytes, "vcodec": info.vcodec, "acodec": info.acodec},
+                   "size_bytes": info.size_bytes, "vcodec": info.vcodec, "acodec": info.acodec,
+                   **({"vertical_path": str(Path(vertical).resolve()), "layout": "screencam",
+                       "cam_ranges": cam_ranges or []} if vertical else {})},
         "camera": str(Path(camera).resolve()) if camera else None,
         "status": "imported", "exports": [],
     }

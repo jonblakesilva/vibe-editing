@@ -156,6 +156,37 @@ def find_restarts_and_repeats(words: list[dict], sents: list[dict]) -> list[dict
     return cuts
 
 
+def find_retakes(sents: list[dict], *, reset_pause: float = 2.5, window: float = 120.0,
+                 opening: int = 6, min_similarity: float = 0.5) -> list[dict]:
+    """Whole-take retries: the speaker stops, resets (a long pause) and starts the same passage
+    again, often worded differently ("Hey guys, I'm Jonathan..." / "Hey guys, my name is
+    Jonathan..."). A take that opens after a reset pause like a later take does is removed up
+    to where that later take starts, so only the last attempt stays."""
+    def head(k: int) -> list[str]:  # first words of a take, across sentence breaks ("Hi, everyone. My name...")
+        toks: list[str] = []
+        for s in sents[k:]:
+            toks += s["tokens"]
+            if len(toks) >= opening:
+                break
+        return toks[:opening]
+
+    starts = [k for k, s in enumerate(sents) if k == 0 or s["start"] - sents[k - 1]["end"] >= reset_pause]
+    cuts = []
+    for n, k in enumerate(starts):
+        a = head(k)
+        if len(a) < 4:
+            continue
+        for j in starts[n + 1:]:
+            if sents[j]["start"] - sents[k]["start"] > window:
+                break
+            if _similar(a, head(j)) >= min_similarity:
+                cuts.append({"start": sents[k]["start"], "end": sents[j]["start"] - 0.05, "type": "retake",
+                             "reason": "Earlier attempt of the same passage - last take kept",
+                             "text": " ".join(s["text"] for s in sents[k:j])[:240], "confidence": 0.75})
+                break
+    return cuts
+
+
 def _strip_lead(tokens: list[str]) -> list[str]:
     i = 0
     while i < len(tokens) and tokens[i] in LEAD_WORDS:
@@ -260,7 +291,7 @@ def merge_cuts(cuts: list[dict], duration: float) -> list[dict]:
             out.append(c)
     # One reviewable item per problem: overlapping bad-take cuts merge into one
     # (restart > repeat > false start), and pauses/fillers inside a bad take disappear.
-    takes = {"restart": 0, "repeat": 1, "false_start": 2}
+    takes = {"retake": 0, "restart": 1, "repeat": 2, "false_start": 3}
     merged: list[dict] = []
     for c in out:
         if c["type"] in takes and merged and merged[-1]["type"] in takes and c["start"] <= merged[-1]["end"]:
@@ -287,6 +318,7 @@ def analyze(transcript: dict, *, pace: str = "natural", aggressive_fillers: bool
     cuts = (find_pauses(words, max_pause=max_pause, keep_pause=keep_pause)
             + find_fillers(words, aggressive=aggressive_fillers or pace in ("tight", "shorts"))
             + find_restarts_and_repeats(words, sents)
+            + find_retakes(sents)
             + find_noise_words(words))
     # Leading/trailing dead air before the first and after the last word.
     if words and words[0]["start"] > 0.5:

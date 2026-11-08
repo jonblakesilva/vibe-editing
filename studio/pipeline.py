@@ -162,8 +162,13 @@ def render_main(pid: str, *, quality: str = "preview", progress=_noop,
     t = get_transcript(pid)
     tl = plan_mod.timeline(plan)
     fps = plan["source"].get("fps") or 30.0
-    cut = render.render_cut(plan["source"]["path"], tl.segments, p["work"], fps=fps, quality=quality,
-                            progress=progress, cancel=cancel)
+    cuts = {}
+
+    def cut_for(src):
+        if src not in cuts:
+            cuts[src] = render.render_cut(src, tl.segments, p["work"], fps=fps, quality=quality,
+                                          progress=progress, cancel=cancel)
+        return cuts[src]
     words = tl.map_words(t["words"])
     faces_src = get_faces(pid, progress) if proj["source"].get("width") else []
     faces = _faces_on_timeline(faces_src, tl)
@@ -174,8 +179,10 @@ def render_main(pid: str, *, quality: str = "preview", progress=_noop,
         fsum = reframe.summarize(faces)
         gfx = render.graphics_for_output(plan, tl, _spec_for(out, quality), p["work"] / "motion",
                                          face_x=fsum["cx"] if fsum else None, face_w=fsum["w"] if fsum else None)
-        info = render.finish(cut, plan, tl, words, out, out_path, p["work"], quality=quality, graphics=gfx,
-                             faces=faces, progress=progress, cancel=cancel)
+        src, laid_out = _source_for(plan, out)
+        info = render.finish(cut_for(src), _layout_plan(plan) if laid_out else plan, tl, words, out, out_path,
+                             p["work"], quality=quality, graphics=gfx, faces=[] if laid_out else faces,
+                             progress=progress, cancel=cancel)
         rep = render.verify(out_path, expect_w=info["width"], expect_h=info["height"], expect_dur=tl.duration)
         rep["captions"] = info["captions"]
         rep["notes"] = info.get("notes", [])
@@ -261,7 +268,7 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
     for k, clip in enumerate(clips):
         # automatic tight-pace cuts plus every cut the editor added or kept in the plan
         plan_cuts = [c for c in plan["cuts"] if c.get("enabled", True) and
-                     c["type"] in ("manual", "restart", "repeat", "false_start", "noise")]
+                     c["type"] in ("manual", "retake", "restart", "repeat", "false_start", "noise")]
         # bad-take decisions come from the plan (the editor may have restored a take);
         # the tight Shorts pass only adds pause / filler / dead-air trims
         pacing = [c for c in analysis["cuts"] if c["type"] in ("pause", "filler", "dead_air")]
@@ -274,8 +281,7 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
         segs = keep_segments(plan["source"]["duration"], window_cuts, fps=fps)
         tl = Timeline(segs)
         sub = (lambda st, x, k=k: progress(f"short {k + 1}/{len(clips)} {st}", x))
-        cut = render.render_cut(plan["source"]["path"], segs, p["work"], fps=fps, quality=quality,
-                                progress=sub, cancel=cancel)
+        cuts = {}
         words = tl.map_words(t["words"])
         faces = _faces_on_timeline(faces_src, tl)
         splan = dict(plan, captions=dict(plan["captions"], **_shorts_caption_style(plan)),
@@ -289,15 +295,20 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
             out_path = p["exports"] / "shorts" / f"{base}.mp4"
             gfx = render.graphics_for_output(splan, tl, _spec_for(out, quality), p["work"] / "motion",
                                              clip_window=(0, tl.duration))
-            info = render.finish(cut, splan, tl, words, out, out_path, p["work"], quality=quality,
-                                 graphics=gfx, faces=faces, burn_captions=True, progress=sub, cancel=cancel)
+            src, laid_out = _source_for(plan, out)
+            if src not in cuts:
+                cuts[src] = render.render_cut(src, segs, p["work"], fps=fps, quality=quality, progress=sub, cancel=cancel)
+            cut = cuts[src]
+            oplan, ofaces = (_layout_plan(splan), []) if laid_out else (splan, faces)
+            info = render.finish(cut, oplan, tl, words, out, out_path, p["work"], quality=quality,
+                                 graphics=gfx, faces=ofaces, burn_captions=True, progress=sub, cancel=cancel)
             rep = render.verify(out_path, expect_w=info["width"], expect_h=info["height"], expect_dur=tl.duration)
             rep.update({"clip": clip["id"], "captions": info["captions"]})
             results.append(rep)
             if clean_copy and quality == "final":
                 clean = out_path.with_name(base + "_clean.mp4")
-                info2 = render.finish(cut, splan, tl, words, out, clean, p["work"], quality=quality, graphics=gfx,
-                                      faces=faces, burn_captions=False, progress=sub, cancel=cancel)
+                info2 = render.finish(cut, oplan, tl, words, out, clean, p["work"], quality=quality, graphics=gfx,
+                                      faces=ofaces, burn_captions=False, progress=sub, cancel=cancel)
                 rep2 = render.verify(clean, expect_w=info2["width"], expect_h=info2["height"], expect_dur=tl.duration)
                 rep2["clip"] = clip["id"]
                 results.append(rep2)
@@ -318,6 +329,20 @@ def _short_graphics(plan: dict, clip: dict) -> list[dict]:
          and x["template"] in ("KineticTitle", "EditorialTitle", "Callout", "CallToAction", "StatPanels",
                                "FloatingCards", "EndCard", "File")]
     return g
+
+
+def _source_for(plan: dict, out: dict) -> tuple[str, bool]:
+    """(path, is_layout_master) for an output. Screen + camera projects have a ready-made
+    vertical layout, so vertical outputs use it instead of cropping the landscape one."""
+    vp = plan["source"].get("vertical_path")
+    if vp and out["height"] > out["width"] and Path(vp).exists():
+        return vp, True
+    return plan["source"]["path"], False
+
+
+def _layout_plan(plan: dict) -> dict:
+    """Captions sit on the seam between screen and camera in the vertical layout."""
+    return dict(plan, captions=dict(plan["captions"], position="middle"))
 
 
 def _faces_on_timeline(faces: list[dict], tl: Timeline) -> list[dict]:

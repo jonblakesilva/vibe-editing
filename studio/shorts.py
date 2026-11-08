@@ -29,7 +29,7 @@ def score_window(sents: list[dict], words: list[dict], topics: list[str], cuts: 
     probs = [w.get("prob", 1.0) for w in w_in] or [1.0]
     fillers = sum(1 for t in toks if t in an.SINGLE_FILLERS)
     cut_secs = sum(max(0, min(c["end"], last["end"]) - max(c["start"], first["start"]))
-                   for c in cuts if c.get("enabled", True) and c["type"] in ("restart", "repeat", "false_start"))
+                   for c in cuts if c.get("enabled", True) and c["type"] in ("retake", "restart", "repeat", "false_start"))
     hook = an.score_hook(first, 0.0) * 1.4
     if first["tokens"] and first["tokens"][0] in DEPENDENT_STARTS:
         hook -= 3
@@ -66,7 +66,7 @@ def find_clips(transcript: dict, analysis: dict, *, count: int = 5, min_len: flo
     sents = [dict(s, tokens=[an.norm(t) for t in s["text"].split() if an.norm(t)]) for s in analysis["sentences"]]
     # never start or end on a take that is being removed
     usable = [s for s in sents if not an._inside(s, [c for c in cuts if c["type"] in
-                                                     ("restart", "repeat", "false_start", "noise")])]
+                                                     ("retake", "restart", "repeat", "false_start", "noise")])]
     cands = []
     for i in range(len(usable)):
         for j in range(i, len(usable)):

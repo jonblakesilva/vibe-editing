@@ -306,7 +306,7 @@ function renderEdit() {
   const el = $('#tab-edit');
   if (!plan) { el.innerHTML = '<p class="muted">The list of suggested cuts appears here once the plan is made.</p>'; return; }
   const s = plan.summary;
-  const typeName = {pause: 'long pause', filler: 'filler word', restart: 'restart', repeat: 'repeated take', false_start: 'false start',
+  const typeName = {pause: 'long pause', filler: 'filler word', restart: 'restart', retake: 'earlier take', repeat: 'repeated take', false_start: 'false start',
     noise: 'unclear sound', dead_air: 'silence', manual: 'your cut'};
   el.innerHTML = `
     ${s.suggested_hook ? `<p><b>Opening hook:</b> "${esc(s.suggested_hook.text)}" <a href="#" data-seek="${s.suggested_hook.start}">${fmt(s.suggested_hook.start)}</a></p>` : ''}

@@ -33,6 +33,17 @@ All commands run from the repo root with the project venv:
   3. Poll `get_export_status` until `completed`, then
      `studio fetch "<downloadUrl>" --name "<title>" --brand <slug> --mode <mode>`.
 - A URL the user owns or has permission to use: `studio download "<url>" --import`.
+- Screen-share recordings (Tella raw export with `Clip N/Camera.mp4` + `Clip N/Screen.mp4`):
+  1. Unzip, transcribe the camera audio first if you need the timings, and pick the full-camera ranges
+     (intro until "let me walk you through this", outro from the wrap-up line).
+  2. `studio import "<folder>" --screencam --cam "0-12.5,340-end" --brand <slug> --mode repurpose`
+     builds two layout masters (landscape: screen on top + rounded camera bubble bottom-left;
+     vertical: screen on top, camera below, captions on the brand-colored seam), with full-screen
+     camera in the `--cam` ranges. Takes are joined in clip order; originals are only read.
+  3. Vertical outputs and Shorts render from the vertical master automatically; zooms are kept only
+     where the camera is full-screen so screen content stays readable.
+- Multiple intro attempts: the planner removes earlier attempts that open like a later one after a
+  reset pause (cut type `retake`); check the first kept sentence in the plan anyway.
 
 Mode: "edit this" = `longform`; "edit + make N Shorts" = `repurpose` (pass `--shorts N` to plan);
 "make a Short/Reel/TikTok" = `shorts`.
@@ -142,3 +153,17 @@ Venture, Booked Solid, Integrity Commercial Solutions). Add `vocabulary` (names,
 
 ## Health
 `studio doctor` (real tests; 30-60 s). Run it first if anything fails.
+
+## Posting through GoHighLevel (only after the user approves each post)
+- Location "The Lead Venture" (`6B4reCngPYfDkJwOtiM0`) has the social planner connected: YouTube
+  (@theleadventure, @tjleads), TikTok (theleadventure, tjleads), Instagram (theleadventures, tjgetsleads),
+  Facebook page, LinkedIn (Jonathan, Tye, company page), Google Business Profile, Pinterest.
+  List with `social-media-posting_get-account`; never guess account ids.
+- Videos must be in GHL Media Storage first (agency connector `upload-media-content`; inline uploads are
+  limited to 25 MB, so final Shorts fit, full-length videos usually do not - give the user the Media
+  Storage link for those). Then `social-media-posting_create-post` with the media URL.
+- Show the user the exact accounts, caption, first comment and schedule time and get a yes before creating
+  anything. Default to `status: "draft"` unless they asked for it to be scheduled. Never publish
+  previews, only final renders. Captions follow the brand's proof-and-claims rules (numbers from the
+  knowledge base or the transcript only; include "Results vary" on result claims).
+

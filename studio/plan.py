@@ -101,14 +101,25 @@ def default_zooms(analysis: dict, vtype: str, mode: str) -> list[dict]:
     return zooms
 
 
+def _zooms_for_layout(zooms: list[dict], src: dict) -> list[dict]:
+    """Screen + camera layouts: punch-ins would crop the screen, so keep only the zooms that
+    fall where the camera is full-screen."""
+    if src.get("layout") != "screencam":
+        return zooms
+    rs = src.get("cam_ranges") or []
+    return [z for z in zooms if any(a <= z["start"] and z["end"] <= b for a, b in rs)]
+
+
 def default_graphics(analysis: dict, brand: dict, title: str, mode: str) -> list[dict]:
     g = []
     if brand.get("intro_style") == "title" and mode == "longform":
         g.append({"id": "g_title", "template": "KineticTitle", "start": 0.0, "duration": 3.0,
                   "props": {"text": title.upper()}, "placement": "overlay", "enabled": True})
     lt = brand.get("lower_third", {})
-    if lt.get("name") and mode == "longform" and analysis["sentences"]:
-        s = analysis["sentences"][min(1, len(analysis["sentences"]) - 1)]
+    bad = [c for c in analysis.get("cuts", []) if c["type"] in ("retake", "restart", "repeat", "false_start", "dead_air")]
+    kept = [s for s in analysis["sentences"] if not an._inside(s, bad)] or analysis["sentences"]
+    if lt.get("name") and mode == "longform" and kept:
+        s = kept[min(1, len(kept) - 1)]  # on the second kept sentence, never on a removed take
         g.append({"id": "g_lower", "template": "LowerThird", "start": s["start"], "duration": 4.5,
                   "props": {"name": lt["name"], "title": lt.get("title", "")}, "placement": "overlay",
                   "enabled": True})
@@ -171,7 +182,8 @@ def build(project: dict, transcript: dict, *, brand: dict, mode: str = "longform
         "version": 1,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "brand": brand.get("slug", "default"),
-        "source": {k: src.get(k) for k in ("path", "duration", "width", "height", "fps")},
+        "source": {k: src.get(k) for k in ("path", "duration", "width", "height", "fps", "vertical_path", "layout", "cam_ranges")
+                   if k in src},
         "summary": {
             "video_type": vtype,
             "topic": options.get("topic") or title_guess,
@@ -187,7 +199,7 @@ def build(project: dict, transcript: dict, *, brand: dict, mode: str = "longform
         "cuts": analysis["cuts"],
         "keep_overrides": [],
         "chapters": analysis["chapters"],
-        "zooms": default_zooms(analysis, vtype, mode) if options.get("zooms", True) else [],
+        "zooms": _zooms_for_layout(default_zooms(analysis, vtype, mode), src) if options.get("zooms", True) else [],
         "captions": cap,
         "graphics": default_graphics(analysis, brand, title_guess, mode) if options.get("graphics", True) else [],
         "broll": [],
