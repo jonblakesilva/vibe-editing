@@ -167,8 +167,9 @@ $('#sourceChips').onclick = (e) => {
   loadPlayer();
 };
 function loadPlayer() {
-  const url = S.source === 'source' ? `/media/${encodeURIComponent(S.pid)}/source/file`
-    : `/media/${encodeURIComponent(S.pid)}/exports/${S.source.split('/').map(encodeURIComponent).join('/')}`;
+  // the /play/ route serves a copy with Opus audio so sound works in every browser (incl. VS Code's)
+  const url = S.source === 'source' ? `/media/${encodeURIComponent(S.pid)}/play/source`
+    : `/media/${encodeURIComponent(S.pid)}/play/${S.source.split('/').map(encodeURIComponent).join('/')}`;
   const v = $('#player');
   if (v.dataset.src !== url) { v.src = url; v.dataset.src = url; }
 }

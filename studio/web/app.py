@@ -215,9 +215,38 @@ def render(pid: str, body: dict = Body(default={})):
     return jm().submit(f"render-{what}-{quality}", pid, fn, pid=pid, quality=quality)
 
 
+def _playable(f: Path, work: Path, key: str) -> Path:
+    """In-app playback copy: same video stream, audio as Opus. Some browsers (notably the one
+    built into VS Code) show H.264 picture but cannot play AAC audio. Downloads keep AAC."""
+    import subprocess
+    out = work / "play" / (key.replace("/", "__") + ".mp4")
+    if out.exists() and out.stat().st_mtime >= f.stat().st_mtime:
+        return out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".part.mp4")
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(f), "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy",
+                        "-c:a", "libopus", "-b:a", "128k", "-ac", "2", "-movflags", "+faststart", str(tmp)],
+                       capture_output=True, text=True)
+    if r.returncode != 0 or not tmp.exists():
+        _log("server.log", f"playable copy failed for {f.name}: {r.stderr[-300:]}")
+        return f
+    tmp.replace(out)
+    return out
+
+
 @app.get("/media/{pid}/{kind}/{rel:path}")
 def media(pid: str, kind: str, rel: str):
     p = pipeline.paths(pid)
+    if kind == "play":  # browser-friendly playback of an export ("source" = the original)
+        if rel in ("source", "source/file"):
+            proxy = p["work"] / "browser_proxy.mp4"
+            src = proxy if proxy.exists() else Path(proj_mod.load(pid)["source"]["path"])
+        else:
+            base = p["exports"].resolve()
+            src = (base / rel).resolve()
+            if base not in src.parents or not src.exists():
+                raise HTTPException(404)
+        return FileResponse(_playable(src, p["work"], rel), media_type="video/mp4")
     if kind == "source":
         proxy = p["work"] / "browser_proxy.mp4"
         f = proxy if proxy.exists() else Path(proj_mod.load(pid)["source"]["path"])

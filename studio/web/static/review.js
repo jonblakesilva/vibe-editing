@@ -119,9 +119,11 @@ function openAsset(asset, v) {
 }
 
 const mediaUrl = (file) => `/media/${encodeURIComponent(pid)}/exports/${file.split('/').map(encodeURIComponent).join('/')}`;
+// playback uses a copy with Opus audio so sound works in every browser (incl. VS Code's); downloads keep the original
+const playUrl = (file) => `/media/${encodeURIComponent(pid)}/play/${file.split('/').map(encodeURIComponent).join('/')}`;
 function setVersion(ver) {
   S.version = ver;
-  vA.src = mediaUrl(ver.file);
+  vA.src = playUrl(ver.file);
   $('#downloadLink').href = mediaUrl(ver.file);
   $('#capA').textContent = S.compare ? `v${ver.v}` : '';
   if (S.compare) setB();
@@ -132,7 +134,7 @@ function setVersion(ver) {
 $('#versionSel').onchange = () => setVersion(S.asset.versions.find((x) => String(x.v) === $('#versionSel').value));
 function setB() {
   const ver = S.asset.versions.find((x) => String(x.v) === $('#versionSelB').value);
-  vB.src = mediaUrl(ver.file);
+  vB.src = playUrl(ver.file);
   vB.currentTime = vA.currentTime;
 }
 $('#versionSelB').onchange = setB;
