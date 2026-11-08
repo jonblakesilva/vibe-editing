@@ -6,7 +6,7 @@ export type LowerThirdProps = BaseProps & {name: string; title?: string};
 
 /** Frosted card with a brand accent bar that wipes in, name and role staggered. */
 export const LowerThird: React.FC<LowerThirdProps> = (p) => {
-  useFonts();
+  useFonts(p.fontTitle);
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const u = unit(p);
@@ -48,7 +48,7 @@ export const LowerThird: React.FC<LowerThirdProps> = (p) => {
           </div>
           {p.title ? (
             <div style={{fontFamily: titleFamily, fontWeight: 600, fontSize: nameSize * 0.48, marginTop: 6 * u,
-              color: p.colors.primary, letterSpacing: '0.14em', textTransform: 'uppercase',
+              color: p.colors.highlight || p.colors.primary, letterSpacing: '0.14em', textTransform: 'uppercase',
               transform: `translateY(${interpolate(roleS, [0, 1], [14 * u, 0])}px)`, opacity: roleS}}>
               {p.title}
             </div>

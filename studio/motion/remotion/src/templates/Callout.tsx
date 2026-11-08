@@ -13,7 +13,7 @@ export type CalloutProps = BaseProps & {
 
 /** Key-point callout: a marker highlight sweeps behind the words, label on top. */
 export const Callout: React.FC<CalloutProps> = (p) => {
-  useFonts();
+  useFonts(p.fontTitle);
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const u = unit(p);

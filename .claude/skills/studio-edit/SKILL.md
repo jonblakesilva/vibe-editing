@@ -78,6 +78,13 @@ title is on screen. Works best with one person and a clean background; hair edge
 speaker fills most of the title area (tight 9:16 crops) the title is put in front and the render prints a
 note - pass that note on to the user.
 
+## Review comments
+The user can pin comments to moments in any video from the dashboard. When they say "work through my
+comments" (or after they review a preview), run `studio comments <p>` to list open comments. For each:
+turn it into revision ops (comments on exports also show the matching original-recording time), apply
+them, then `studio comments <p> --resolve <id> --note "what you changed"`. Ask the user if a comment is
+ambiguous. Re-run the preview afterwards.
+
 ## 4. Preview, approve, render
 - `studio preview <p> [--shorts]` - half-resolution, fast. Show the files (exports folder).
 - `studio approve <p>` only after the user says yes.
@@ -85,6 +92,11 @@ note - pass that note on to the user.
   verified with ffprobe and a full decode. Report PASS/FAIL honestly.
 Exports land in `~/VibeStudio/projects/<id>/exports/` with .srt/.vtt captions, `chapters.txt`
 and `publishing_pack.md` (titles, description, thumbnail ideas, social captions - drafts to refine).
+
+## Framing
+`reframe.mode` in the plan: `auto` (default: follows the speaker; if two people are on screen most of
+the time, vertical versions use a stacked interview layout), `largest`, `split`, or `center` (screen
+recordings). Example: `studio set <p> reframe.mode '"center"'`.
 
 ## Brands
 `studio brand list|new "Name"|next <slug>|answer <slug> <key> <value>|set <slug> <path> <json>|add-reference <slug> <file>`

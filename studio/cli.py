@@ -284,6 +284,28 @@ def cmd_keys(a):
     return 0
 
 
+def cmd_comments(a):
+    from . import comments
+    pid = proj_mod.resolve_id(a.project)
+    if a.add:
+        c = comments.add(pid, a.add, at=a.at or 0.0, file=a.file)
+        print(f"Added comment {c['id']} at {c['at']}s")
+        return 0
+    if a.resolve:
+        comments.update(pid, a.resolve, status="resolved", resolution=a.note or "Done")
+        print(f"Resolved {a.resolve}")
+        return 0
+    items = comments.load(pid)
+    shown = [c for c in items if a.all or c["status"] == "open"]
+    if not shown:
+        print("No open comments." if not a.all else "No comments.")
+    for c in shown:
+        where = "original" if c["file"] == "source" else c["file"]
+        src = f" (original {c['source_at']:.1f}s)" if c.get("source_at") is not None and c["file"] != "source" else ""
+        print(f"[{c['id']}] {c['status']:<8} {where} @ {c['at']:.1f}s{src}: {c['text']}")
+    return 0
+
+
 def cmd_serve(a):
     import uvicorn
     from .web.app import app
@@ -400,6 +422,16 @@ def main(argv=None):
     s.add_argument("action", choices=["set", "status"])
     s.add_argument("name", nargs="?", choices=list(config.SECRET_NAMES))
     s.set_defaults(fn=cmd_keys)
+
+    s = sub.add_parser("comments", help="list, add or resolve review comments")
+    s.add_argument("project")
+    s.add_argument("--add", help="comment text")
+    s.add_argument("--at", type=float, help="seconds into the file")
+    s.add_argument("--file", default="source", help="'source' or an export path like name_youtube.mp4")
+    s.add_argument("--resolve", help="comment id to mark resolved")
+    s.add_argument("--note", help="what was done (with --resolve)")
+    s.add_argument("--all", action="store_true")
+    s.set_defaults(fn=cmd_comments)
 
     s = sub.add_parser("serve")
     s.add_argument("--port", type=int, default=8765)

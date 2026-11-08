@@ -176,6 +176,38 @@ def media(pid: str, kind: str, rel: str):
     return FileResponse(f)  # supports Range requests for seeking
 
 
+# ------------------------------------------------------------ comments
+
+@app.get("/api/projects/{pid}/comments")
+def list_comments(pid: str):
+    from .. import comments
+    return comments.load(proj_mod.resolve_id(pid))
+
+
+@app.post("/api/projects/{pid}/comments")
+def add_comment(pid: str, body: dict = Body(...)):
+    from .. import comments
+    if not str(body.get("text", "")).strip():
+        raise HTTPException(400, "Write a comment first.")
+    return comments.add(proj_mod.resolve_id(pid), body["text"], at=float(body.get("at", 0)),
+                        file=body.get("file", "source"))
+
+
+@app.post("/api/projects/{pid}/comments/{cid}")
+def edit_comment(pid: str, cid: str, body: dict = Body(...)):
+    from .. import comments
+    pid = proj_mod.resolve_id(pid)
+    try:
+        if body.get("action") == "apply":
+            return comments.try_apply(pid, cid)
+        if body.get("action") == "delete":
+            comments.delete(pid, cid)
+            return {"deleted": cid}
+        return comments.update(pid, cid, **{k: v for k, v in body.items() if k != "action"})
+    except Exception as e:
+        _err(e)
+
+
 # ------------------------------------------------------------ jobs
 
 @app.get("/api/jobs")

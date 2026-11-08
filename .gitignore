@@ -36,3 +36,4 @@ studio/motion/remotion/out/
 studio/tests/fixtures/*.wav
 studio/tests/fixtures/*.mp4
 .pytest_cache/
+studio/motion/remotion/public/brand/

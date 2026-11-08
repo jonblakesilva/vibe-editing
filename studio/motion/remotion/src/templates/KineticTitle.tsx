@@ -16,7 +16,7 @@ export type KineticTitleProps = BaseProps & {
  * With placement "behind" the same layer is composited behind the speaker.
  */
 export const KineticTitle: React.FC<KineticTitleProps> = (p) => {
-  useFonts();
+  useFonts(p.fontTitle);
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const u = unit(p);

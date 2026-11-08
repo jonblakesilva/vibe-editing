@@ -29,7 +29,7 @@ Nothing is ever published automatically.
 | | Status |
 |---|---|
 | Windows 10/11 | Tested (this fork was built and tested on Windows 11, AMD Ryzen, no NVIDIA GPU) |
-| macOS / Linux | Should work (all paths are cross-platform), but not tested yet |
+| macOS / Linux | The fast test suite runs on macOS and Ubuntu in GitHub Actions on every push (`.github/workflows/studio-tests.yml`); full renders have only been run on Windows |
 
 Transcription uses an NVIDIA GPU automatically if one exists; otherwise the CPU (a 1-minute clip takes
 about 10-20 s on a mid-range laptop with the `small` model). Hardware video encoders are detected
@@ -77,7 +77,9 @@ Or use the dashboard: `.venv\Scripts\python -m studio serve` → http://127.0.0.
 It has upload/drag-and-drop, project library, brand selection, mode selection, the transcript (click
 to jump, double-click to fix a word), the editing plan with a timeline of kept vs removed sections,
 caption/graphics/audio/export settings, Shorts with scores, real job progress with cancel/retry,
-exports, and dark/light mode.
+exports, and dark/light mode. **Comments:** pause any video (original, preview or final), type a
+note, and it is pinned to that moment (shown as a dot on the timeline). Simple requests ("remove that
+zoom") can be applied with one click; for the rest, tell Claude "work through my comments".
 
 Projects, brands and renders are stored in `%USERPROFILE%\VibeStudio` (override with
 `VIBE_STUDIO_HOME`), never inside the repository.
@@ -159,15 +161,16 @@ The sample recording (with deliberate mistakes) is generated locally by
 
 ## Known limitations
 
-- Tested on Windows only so far. The original kit's own scripts (`plugins/`) are still macOS-first:
-  on Windows 11 of its 35 tests fail (7 use the Unix-only `fcntl` module, 3 check Unix file
-  permissions, 1 reads files with the wrong text encoding). Vibe Studio does not depend on them.
+- Full end-to-end renders have been verified on Windows; macOS/Linux run the fast tests in CI.
+- The original kit's scripts were made Windows-compatible enough for all 35 of its tests to pass
+  (portable file locking, UTF-8 reads, home-folder lookup), but its full `/edit` pipeline still assumes
+  macOS tools in places and was not run end to end.
 - The editing analysis is rule-based; Claude Code's review is what catches context ("this tangent can
   go"). Without Claude (dashboard only), review the cut list yourself before approving.
-- Speaker tracking follows the largest face. Two-person interviews are cropped to whoever is largest.
+- Two-person interviews get a stacked vertical layout when both are on screen most of the time; there is
+  no active-speaker switching yet (who is talking is not detected).
 - B-roll is only inserted from clips you add yourself (no stock library is searched automatically).
   Music is only used from tracks you provide and have the rights to.
-- Zoom ramps use FFmpeg `zoompan`, which can show slight stepping on very slow pushes; punch-ins are clean.
 - Chapters need at least 3 sections of 10+ seconds (YouTube's rule); short videos get a note instead.
 - Very long recordings are processed in streamed sections, but faster-whisper holds the 16 kHz audio
   in memory (about 115 MB per hour).

@@ -7,7 +7,7 @@ export type BrandIntroProps = BaseProps & {brand: string; tagline?: string; logo
 /** Short branded opener: animated gradient field, light streak, logo/name reveal.
  * Renders an opaque frame (it is a full-screen card, not an overlay). */
 export const BrandIntro: React.FC<BrandIntroProps> = (p) => {
-  useFonts();
+  useFonts(p.fontTitle);
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const u = unit(p);
@@ -21,11 +21,11 @@ export const BrandIntro: React.FC<BrandIntroProps> = (p) => {
       <Fill style={{background: `linear-gradient(105deg, rgba(255,255,255,0) ${streak - 8}%, rgba(255,255,255,0.18) ${streak}%, rgba(255,255,255,0) ${streak + 8}%)`}}>{null}</Fill>
       <Fill style={{display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 24 * u}}>
         {p.logo ? (
-          <Img src={staticFile(p.logo)} style={{height: 220 * u, transform: `scale(${interpolate(s, [0, 1], [0.8, 1])})`, opacity: s}} />
+          <Img src={staticFile(p.logo)} style={{height: 380 * u, transform: `scale(${interpolate(s, [0, 1], [0.8, 1])})`, opacity: s}} />
         ) : null}
-        <div style={{fontFamily: titleFamily, fontWeight: 900, fontSize: 130 * u, color: p.colors.text,
+        {p.logo ? null : <div style={{fontFamily: titleFamily, fontWeight: 900, fontSize: 130 * u, color: p.colors.text,
           letterSpacing: `${interpolate(s, [0, 1], [0.3, 0.02])}em`, textShadow: depthShadow(u, 1),
-          opacity: s, transform: `translateY(${(1 - s) * 30 * u}px)`}}>{p.brand.toUpperCase()}</div>
+          opacity: s, transform: `translateY(${(1 - s) * 30 * u}px)`}}>{p.brand.toUpperCase()}</div>}
         {p.tagline ? (
           <div style={{fontFamily: titleFamily, fontWeight: 600, fontSize: 40 * u, color: p.colors.primary, letterSpacing: '0.3em',
             opacity: interpolate(frame, [fps * 0.6, fps], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})}}>

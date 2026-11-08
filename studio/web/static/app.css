@@ -102,6 +102,16 @@ video { width: 100%; background: #000; border-radius: var(--radius-lg); max-heig
 .job .err { color: var(--pencil); font-size: 0.85rem; white-space: pre-wrap; margin: 0.4rem 0 0; }
 .job button { padding: 0.2rem 0.6rem; font-size: 0.85rem; }
 
+.comments { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 1rem; margin-top: 1rem; }
+.comments label { font-weight: 600; }
+.comment-list { list-style: none; margin: 0.6rem 0 0; padding: 0; display: flex; flex-direction: column; }
+.comment-list li { display: grid; grid-template-columns: auto 1fr auto; gap: 0.6rem; align-items: start; padding: 0.55rem 0; border-top: 1px solid var(--line); }
+.comment-list li[data-s="resolved"], .comment-list li[data-s="applied"] { color: var(--muted); }
+.comment-list .where { color: var(--muted); font-size: 0.8rem; display: block; }
+.comment-list .res { color: var(--ok); font-size: 0.82rem; display: block; }
+.comment-list .acts { display: flex; gap: 0.3rem; }
+.comment-list .acts button { padding: 0.15rem 0.5rem; font-size: 0.8rem; }
+.strip .cmark { position: absolute; top: 0; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: var(--ink); border: 2px solid var(--bg); cursor: pointer; }
 .revise { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 1rem; }
 .revise label { font-weight: 600; }
 .row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }

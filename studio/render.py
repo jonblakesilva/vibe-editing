@@ -130,6 +130,18 @@ def zoom_expr(zooms: list[dict]) -> str | None:
     return "1+" + "+".join(terms)
 
 
+def zoom_filter(z_expr: str, fx: float, fy: float, fps: float) -> str:
+    """Sub-pixel smooth zoom: the perspective filter samples a shrinking window with bicubic
+    interpolation every frame, so slow pushes glide instead of stepping whole pixels
+    (zoompan rounds its window to integers). The window stays inside the frame."""
+    z = f"({z_expr.replace('it', f'(in/{fps})')})"
+    left = f"clip({fx:.4f}*W-W/(2*{z}),0,W-W/{z})"
+    top = f"clip({fy:.4f}*H-H/(2*{z}),0,H-H/{z})"
+    right, bottom = f"({left}+W/{z})", f"({top}+H/{z})"
+    return (f"perspective=x0='{left}':y0='{top}':x1='{right}':y1='{top}':x2='{left}':y2='{bottom}':"
+            f"x3='{right}':y3='{bottom}':interpolation=cubic:sense=source:eval=frame")
+
+
 def graphics_for_output(plan: dict, tl: Timeline, out_spec: dict, motion_dir: Path, *,
                         clip_window: tuple[float, float] | None = None) -> list[dict]:
     """Rendered overlay files for this output's resolution, timed on the edited timeline."""
@@ -145,7 +157,13 @@ def graphics_for_output(plan: dict, tl: Timeline, out_spec: dict, motion_dir: Pa
         if path:
             items.append({"path": path, "start": start, "duration": g["duration"], "id": g["id"],
                           "placement": g.get("placement", "overlay")})
-    return items
+    # Cuts can push graphics on top of each other; stagger them so each one reads on its own.
+    items.sort(key=lambda g: g["start"])
+    for prev, cur in zip(items, items[1:]):
+        end = prev["start"] + prev["duration"]
+        if cur["start"] < end + 0.3:
+            cur["start"] = round(end + 0.3, 3)
+    return [g for g in items if g["start"] < tl.duration - 0.5]
 
 
 def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dict, out_path: Path,
@@ -163,11 +181,17 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
     filters = []
     v = "[0:v]"
     face_sum = reframe.summarize(faces or [])
-    # 1) aspect: smart crop around the speaker, or plain center crop
-    if abs(out_aspect - src_aspect) > 0.01:
+    mode = (plan.get("reframe") or {}).get("mode", "auto")
+    people = reframe.two_people(faces or []) if (mode in ("auto", "split") and out_aspect < 0.8) else None
+    # 1) aspect: interview split, smart crop around the speaker, or plain center crop
+    if people:
+        filters.append(reframe.split_filter(v, people, src_w=info.width, src_h=info.height, out_w=W, out_h=H) + "[vc]")
+        v = "[vc]"
+        face_sum = None  # captions sit on the seam area below; zooms stay centered
+    elif abs(out_aspect - src_aspect) > 0.01:
         if out_aspect < src_aspect:
             crop_w = int(round(info.height * out_aspect / 2) * 2)
-            keys = reframe.camera_path(faces or [], info.duration, src_w=info.width, src_h=info.height,
+            keys = reframe.camera_path(faces if mode != "center" else [], info.duration, src_w=info.width, src_h=info.height,
                                        out_aspect=out_aspect)
             filters.append(f"{v}crop=w={crop_w}:h={info.height}:x='{reframe.crop_x_expr(keys)}':y=0[vc]")
         else:
@@ -189,8 +213,7 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
     if ze:
         fx = face_sum["cx"] if (face_sum and abs(out_aspect - src_aspect) <= 0.01) else 0.5
         fy = max(0.3, min(0.6, face_sum["cy"])) if face_sum else 0.42
-        filters.append(
-            f"{v}zoompan=z='{ze}':x='({fx:.3f}*iw)-(iw/zoom/2)':y='({fy:.3f}*ih)-(ih/zoom/2)':d=1:s={W}x{H}:fps={fps}[vz]")
+        filters.append(f"{v}{zoom_filter(ze, fx, fy, fps)}[vz]")
         v = "[vz]"
     # 3) B-roll (video replaces picture, speech continues)
     idx = 1
@@ -219,6 +242,8 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
     # 5) captions
     cap_info = None
     style = dict(plan["captions"])
+    if people and style.get("position", "auto") == "auto":
+        style["position"] = "middle"  # on the seam between the two people, never over a face
     do_caps = style.get("enabled", True) if burn_captions is None else burn_captions
     stem = out_path.stem
     if words:
@@ -266,6 +291,8 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
             progress("subject mask", 1.0)
     elif any(g.get("placement") == "behind" for g in graphics or []):
         notes.append("Subject masking unavailable (mediapipe not installed): 'behind' graphics were placed in front.")
+    if people:
+        notes.append("Two people detected: vertical version uses a stacked interview layout.")
     return {"captions": cap_info, "width": W, "height": H, "notes": notes, "behind": len(behind)}
 
 

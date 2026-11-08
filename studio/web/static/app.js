@@ -69,6 +69,7 @@ async function refresh() {
   $('#renderBtn').hidden = !approved;
   $('#previewBtn').disabled = !plan;
   setupPlayer();
+  await loadComments();
   drawStrip();
   renderPlan();
   renderStyle();
@@ -104,10 +105,13 @@ function drawStrip() {
   strip.innerHTML = segs.map(([a, b]) =>
     `<div class="seg" style="left:${(a / dur) * 100}%;width:${((b - a) / dur) * 100}%" title="${fmt(a)} - ${fmt(b)} kept"></div>`).join('') +
     (plan?.chapters || []).map((c) => `<div class="mark" style="left:${(c.start / dur) * 100}%" title="${esc(c.title)}"></div>`).join('') +
+    (state.comments || []).filter((c) => c.source_at != null && c.status === 'open').map((c) =>
+      `<div class="cmark" data-t="${c.source_at}" style="left:${(c.source_at / dur) * 100}%" title="${esc(c.text)}"></div>`).join('') +
     '<div class="head" id="head"></div>';
   $('#stripTimes').textContent = plan ? `${segs.length} kept sections` : '';
 }
 $('#strip').onclick = (e) => {
+  if (e.target.dataset.t) { seekSource(parseFloat(e.target.dataset.t)); return; }
   const r = e.currentTarget.getBoundingClientRect();
   seekSource(((e.clientX - r.left) / r.width) * state.data.project.source.duration);
 };
@@ -117,7 +121,57 @@ function seekSource(t) {
   const go = () => { pl.currentTime = t; pl.play().catch(() => {}); };
   pl.readyState >= 1 ? go() : pl.addEventListener('loadedmetadata', go, {once: true});
 }
+// ---------------------------------------------------------------- comments
+async function loadComments() {
+  state.comments = await api(`/api/projects/${state.pid}/comments`);
+  const label = (c) => (c.file === 'source' ? 'Original' : c.file.replace(/_/g, ' ').replace('.mp4', ''));
+  const list = [...state.comments].sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || a.at - b.at);
+  $('#commentList').innerHTML = list.length ? list.map((c) => `<li data-s="${esc(c.status)}">
+      <a class="tlink" data-cfile="${esc(c.file)}" data-cat="${c.at}">${fmt(c.at)}</a>
+      <div>${esc(c.text)}<span class="where">${esc(label(c))}${c.status !== 'open' ? ` - ${esc(c.status)}` : ''}</span>
+        ${c.resolution ? `<span class="res">${esc(c.resolution)}</span>` : ''}</div>
+      <div class="acts">${c.status === 'open'
+        ? `<button type="button" data-capply="${esc(c.id)}" title="Change the plan if this is a request like 'remove that zoom'">Apply</button>
+           <button type="button" data-cdone="${esc(c.id)}">Resolve</button>`
+        : `<button type="button" data-creopen="${esc(c.id)}">Reopen</button>`}
+        <button type="button" data-cdel="${esc(c.id)}" aria-label="Delete comment">Delete</button></div></li>`).join('')
+    : '<li><span></span><span class="meta">No comments yet. Claude reads open comments when you ask it to work through them.</span><span></span></li>';
+}
+const currentFile = () => $('#playerSource').value;
+$('#commentForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const text = $('#commentText').value.trim();
+  if (!text) return;
+  await api(`/api/projects/${state.pid}/comments`, {method: 'POST', body: {text, at: $('#player').currentTime, file: currentFile()}});
+  $('#commentText').value = '';
+  await loadComments();
+  drawStrip();
+};
+$('#commentList').onclick = async (e) => {
+  const t = e.target;
+  if (t.dataset.cat) {
+    const f = t.dataset.cfile;
+    if ($('#playerSource').value !== f && [...$('#playerSource').options].some((o) => o.value === f)) { $('#playerSource').value = f; loadPlayer(); }
+    const pl = $('#player');
+    const go = () => { pl.currentTime = parseFloat(t.dataset.cat); pl.pause(); };
+    pl.readyState >= 1 ? go() : pl.addEventListener('loadedmetadata', go, {once: true});
+    return;
+  }
+  const act = t.dataset.capply ? ['apply', t.dataset.capply] : t.dataset.cdone ? ['resolved', t.dataset.cdone]
+    : t.dataset.creopen ? ['open', t.dataset.creopen] : t.dataset.cdel ? ['delete', t.dataset.cdel] : null;
+  if (!act) return;
+  const [what, id] = act;
+  const body = what === 'apply' || what === 'delete' ? {action: what} : {status: what, resolution: what === 'resolved' ? 'Marked done' : null};
+  const r = await api(`/api/projects/${state.pid}/comments/${id}`, {method: 'POST', body});
+  if (what === 'apply') {
+    $('#reviseMsg').textContent = r.status === 'applied' ? 'Comment applied to the plan. Make a preview to see it.'
+      : 'That one needs Claude: ask "work through my comments" in VS Code.';
+    await refresh();
+  } else { await loadComments(); drawStrip(); }
+};
+
 $('#player').ontimeupdate = () => {
+  $('#commentBtn').textContent = `Add at ${fmt($('#player').currentTime)}`;
   const t = sourceTime();
   const head = $('#head');
   if (head) head.style.display = t == null ? 'none' : 'block';

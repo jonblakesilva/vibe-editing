@@ -54,6 +54,14 @@
               <select id="playerSource"></select>
             </label>
           </div>
+          <form id="commentForm" class="comments">
+            <label for="commentText">Comment on this moment</label>
+            <div class="row">
+              <input id="commentText" placeholder="Pause the video, then type a note" autocomplete="off">
+              <button class="primary" id="commentBtn">Add at 0:00.0</button>
+            </div>
+            <ol id="commentList" class="comment-list"></ol>
+          </form>
           <div id="jobs" class="jobs" aria-live="polite"></div>
           <form id="reviseForm" class="revise">
             <label for="reviseText">Ask for a change</label>

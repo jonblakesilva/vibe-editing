@@ -45,7 +45,11 @@ def track_faces(src: str | Path, *, start: float = 0.0, duration: float | None =
                 f = max(faces, key=lambda r: r[2] * r[3])
                 x, y, fw, fh, score = float(f[0]), float(f[1]), float(f[2]), float(f[3]), float(f[-1])
                 out.append({"t": round(t, 3), "cx": (x + fw / 2) / width, "cy": (y + fh / 2) / h,
-                            "w": fw / width, "h": fh / h, "score": round(score, 3)})
+                            "w": fw / width, "h": fh / h, "score": round(score, 3),
+                            "all": [[round((float(r[0]) + float(r[2]) / 2) / width, 4),
+                                     round((float(r[1]) + float(r[3]) / 2) / h, 4),
+                                     round(float(r[2]) / width, 4), round(float(r[3]) / h, 4)]
+                                    for r in faces if float(r[2]) * float(r[3]) > 0.25 * fw * fh]})
             i += 1
     finally:
         proc.stdout.close()  # type: ignore[union-attr]
@@ -62,6 +66,36 @@ def summarize(faces: list[dict]) -> dict | None:
     h = float(np.median([f["h"] for f in faces]))
     return {"cx": cx, "cy": cy, "w": w, "h": h, "box": {"x": cx - w / 2, "y": cy - h / 2, "w": w, "h": h},
             "coverage": len(faces)}
+
+
+def two_people(faces: list[dict], *, min_share: float = 0.6, min_gap: float = 0.22) -> list[dict] | None:
+    """If two people are on screen for most of the clip (an interview), return their median
+    positions [left, right]; otherwise None."""
+    pairs = []
+    for f in faces:
+        people = sorted(f.get("all") or [], key=lambda r: -r[2] * r[3])[:2]
+        if len(people) == 2 and abs(people[0][0] - people[1][0]) >= min_gap:
+            pairs.append(sorted(people, key=lambda r: r[0]))
+    if not faces or len(pairs) < min_share * len(faces):
+        return None
+    arr = np.array(pairs)  # (n, 2, 4)
+    med = np.median(arr, axis=0)
+    return [{"cx": float(m[0]), "cy": float(m[1]), "w": float(m[2]), "h": float(m[3])} for m in med]
+
+
+def split_filter(src: str, people: list[dict], *, src_w: int, src_h: int, out_w: int, out_h: int) -> str:
+    """Vertical interview layout: each person framed in their own half, stacked."""
+    half_h = out_h // 2
+    aspect = out_w / half_h
+    parts = []
+    for i, p in enumerate(people):
+        ch = int(min(src_h, max(p["h"] * src_h * 2.3, src_h * 0.35)) // 2 * 2)
+        cw = int(min(src_w * 0.55, ch * aspect) // 2 * 2)  # stay on this person's side
+        ch = int(min(ch, cw / aspect) // 2 * 2)
+        x = int(np.clip(p["cx"] * src_w - cw / 2, 0, src_w - cw))
+        y = int(np.clip(p["cy"] * src_h - ch * 0.42, 0, src_h - ch))
+        parts.append(f"[sp{i}]crop={cw}:{ch}:{x}:{y},scale={out_w}:{half_h}:flags=lanczos,setsar=1[sq{i}]")
+    return (f"{src}split=2[sp0][sp1];" + ";".join(parts) + f";[sq0][sq1]vstack=inputs=2")
 
 
 def camera_path(faces: list[dict], duration: float, *, src_w: int, src_h: int, out_aspect: float,

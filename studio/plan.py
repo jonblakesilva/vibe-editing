@@ -101,7 +101,7 @@ def default_graphics(analysis: dict, brand: dict, title: str, mode: str) -> list
     for i, cta in enumerate(analysis["cta"][-1:]):
         text = brand.get("cta", {}).get("text") or cta["text"]
         g.append({"id": f"g_cta{i + 1}", "template": "CallToAction", "start": cta["start"],
-                  "duration": max(3.0, min(6.0, cta["end"] - cta["start"] + 1.5)),
+                  "duration": round(max(3.0, min(6.0, cta["end"] - cta["start"] + 1.5)), 1),
                   "props": {"text": _short(text, 8), "url": brand.get("cta", {}).get("url", "")},
                   "placement": "overlay", "enabled": True})
     return g
@@ -161,6 +161,7 @@ def build(project: dict, transcript: dict, *, brand: dict, mode: str = "longform
         "captions": cap,
         "graphics": default_graphics(analysis, brand, title_guess, mode) if options.get("graphics", True) else [],
         "broll": [],
+        "reframe": {"mode": "auto"},  # auto | largest | split | center (vertical/square crops)
         "audio": {"clean": True, "denoise": "light", "normalize": True,
                   "target_lufs": -14.0 if mode == "longform" else -14.0, "music": None},
         "outputs": [dict(PLATFORM_OUTPUTS[o], name=o) for o in (outputs or (

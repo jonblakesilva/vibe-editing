@@ -7,7 +7,7 @@ export type ChapterCardProps = BaseProps & {number: number; title: string};
 /** Chapter marker: oversized outlined number, a line that draws across, and a
  * masked title reveal over a soft vignette on the left third of the frame. */
 export const ChapterCard: React.FC<ChapterCardProps> = (p) => {
-  useFonts();
+  useFonts(p.fontTitle);
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const u = unit(p);
