@@ -268,15 +268,9 @@ def verify(path: Path, *, expect_w: int, expect_h: int, expect_dur: float | None
         "codec_h264": info.vcodec == "h264", "codec_aac": info.acodec == "aac",
         "resolution": (info.width, info.height) == (expect_w, expect_h),
     }
-    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                          "stream=duration", "-of", "csv=p=0", str(path)], capture_output=True, text=True)
-    aout = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
-                           "stream=duration", "-of", "csv=p=0", str(path)], capture_output=True, text=True)
-    try:
-        vd, ad = float(out.stdout.strip()), float(aout.stdout.strip())
-    except ValueError:
-        vd = ad = info.duration
-    checks["av_sync_drift_ok"] = abs(vd - ad) <= 0.1
+    sd = media.stream_durations(path)
+    vd, ad = sd.get("video", info.duration), sd.get("audio", 0.0)
+    checks["av_sync_drift_ok"] = abs(vd - ad) <= 0.05
     if expect_dur is not None:
         checks["duration_ok"] = abs(info.duration - expect_dur) <= max(0.25, expect_dur * 0.005)
     if full_decode:

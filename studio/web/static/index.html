@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vibe Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="library" aria-label="Projects">
+    <div class="brandmark">Vibe Studio</div>
+    <button class="primary wide" id="newBtn">New video</button>
+    <nav id="projectList" class="projects"></nav>
+    <div class="aside-foot">
+      <button class="ghost" id="brandsBtn">Brand profiles</button>
+      <button class="ghost" id="themeBtn" aria-label="Switch light or dark mode">Light mode</button>
+    </div>
+  </aside>
+
+  <main id="main">
+    <section id="empty" class="empty">
+      <h1>Drop in a recording to start.</h1>
+      <p>Long videos, Tella exports, screen recordings. You review the editing plan before anything is rendered, and your original file is never changed.</p>
+      <button class="primary" id="emptyNew">New video</button>
+    </section>
+
+    <section id="workspace" hidden>
+      <header class="proj-head">
+        <div>
+          <h1 id="projName"></h1>
+          <p id="projMeta" class="meta"></p>
+        </div>
+        <div class="actions">
+          <span id="planStatus" class="status-pill"></span>
+          <button id="previewBtn">Make preview</button>
+          <button id="approveBtn" class="primary">Approve plan</button>
+          <button id="renderBtn" class="primary" hidden>Render final</button>
+        </div>
+      </header>
+
+      <div class="strip-wrap">
+        <div id="strip" class="strip" role="img" aria-label="Timeline of the recording: kept sections and removed mistakes"></div>
+        <div class="strip-legend"><span class="key kept"></span>kept <span class="key cut"></span>removed <span id="stripTimes" class="meta"></span></div>
+      </div>
+
+      <div class="grid">
+        <div class="left">
+          <video id="player" controls preload="metadata"></video>
+          <div class="player-bar">
+            <label>Show
+              <select id="playerSource"></select>
+            </label>
+          </div>
+          <div id="jobs" class="jobs" aria-live="polite"></div>
+          <form id="reviseForm" class="revise">
+            <label for="reviseText">Ask for a change</label>
+            <div class="row">
+              <input id="reviseText" placeholder="Make the captions smaller" autocomplete="off">
+              <button>Apply</button>
+            </div>
+            <p class="hint">Changes are applied at the current playhead time when they refer to "that zoom" or "that section".</p>
+            <p id="reviseMsg" class="meta"></p>
+          </form>
+        </div>
+
+        <div class="right">
+          <div class="tabs" role="tablist">
+            <button role="tab" data-tab="plan" aria-selected="true">Plan</button>
+            <button role="tab" data-tab="transcript">Transcript</button>
+            <button role="tab" data-tab="style">Captions &amp; graphics</button>
+            <button role="tab" data-tab="shorts">Shorts</button>
+            <button role="tab" data-tab="exports">Exports</button>
+          </div>
+          <div class="tabpanel" id="tab-plan"></div>
+          <div class="tabpanel" id="tab-transcript" hidden></div>
+          <div class="tabpanel" id="tab-style" hidden></div>
+          <div class="tabpanel" id="tab-shorts" hidden></div>
+          <div class="tabpanel" id="tab-exports" hidden></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="newDialog">
+  <form method="dialog" id="newForm">
+    <h2>New video</h2>
+    <label class="drop" id="drop">
+      <input type="file" id="fileInput" accept="video/*">
+      <span id="dropText">Drop a video here or click to choose one</span>
+    </label>
+    <label>Or paste a file or folder path (a Tella export folder works)
+      <input id="pathInput" placeholder="C:\Users\you\Videos\Tella\my-recording.mp4">
+    </label>
+    <div class="row2">
+      <label>What should I make?
+        <select id="modeInput">
+          <option value="longform">Full edited video</option>
+          <option value="repurpose">Full video + Shorts</option>
+          <option value="shorts">One short video</option>
+        </select>
+      </label>
+      <label>Brand
+        <select id="brandInput"><option value="">No brand yet</option></select>
+      </label>
+    </div>
+    <div class="row2">
+      <label>Number of Shorts <input id="shortsCount" type="number" min="1" max="20" value="5"></label>
+      <label>Short length
+        <select id="shortLen">
+          <option value="15,30">15-30 s</option>
+          <option value="20,60" selected>20-60 s</option>
+          <option value="45,90">45-90 s</option>
+        </select>
+      </label>
+    </div>
+    <p id="newMsg" class="meta"></p>
+    <div class="dialog-actions">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button class="primary" id="createBtn" value="default">Import and plan</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="brandDialog">
+  <form method="dialog" id="brandForm">
+    <h2>Brand profiles</h2>
+    <div id="brandList"></div>
+    <div id="brandQ"></div>
+    <div class="row">
+      <input id="brandName" placeholder="New brand name, e.g. Booked Solid">
+      <button id="brandCreate" type="button">Create</button>
+    </div>
+    <div class="dialog-actions"><button value="close">Done</button></div>
+  </form>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

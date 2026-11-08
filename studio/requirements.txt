@@ -1,0 +1,13 @@
+# Vibe Studio (Python 3.11-3.13 recommended). Installed into the project-local .venv only.
+#   py -3.13 -m venv .venv  &&  .venv\Scripts\python -m pip install -r studio/requirements.txt
+faster-whisper>=1.2,<2      # offline word-level transcription (MIT)
+soundfile>=0.12             # reads the 16 kHz WAV ffmpeg extracts
+numpy>=1.26
+opencv-python>=4.9          # YuNet face tracking for smart crops
+Pillow>=10
+requests>=2.31              # optional Groq transcription
+yt-dlp>=2024.1              # downloads of videos you own / have permission to use
+fastapi>=0.110              # local dashboard
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9     # dashboard uploads
+pytest>=8                   # test suite

@@ -258,7 +258,22 @@ def merge_cuts(cuts: list[dict], duration: float) -> list[dict]:
         c["start"], c["end"] = round(max(0.0, c["start"]), 3), round(min(duration, c["end"]), 3)
         if c["end"] - c["start"] >= 0.05:
             out.append(c)
-    return out
+    # One reviewable item per problem: overlapping bad-take cuts merge into one
+    # (restart > repeat > false start), and pauses/fillers inside a bad take disappear.
+    takes = {"restart": 0, "repeat": 1, "false_start": 2}
+    merged: list[dict] = []
+    for c in out:
+        if c["type"] in takes and merged and merged[-1]["type"] in takes and c["start"] <= merged[-1]["end"]:
+            m = merged[-1]
+            if takes[c["type"]] < takes[m["type"]]:
+                m["type"], m["reason"], m["text"] = c["type"], c["reason"], c.get("text", m.get("text"))
+            m["end"] = max(m["end"], c["end"])
+            m["confidence"] = max(m.get("confidence", 0), c.get("confidence", 0))
+            continue
+        merged.append(c)
+    bad = [c for c in merged if c["type"] in takes]
+    return [c for c in merged if c["type"] in takes or not any(
+        d["start"] <= c["start"] and c["end"] <= d["end"] for d in bad)]
 
 
 def analyze(transcript: dict, *, pace: str = "natural", aggressive_fillers: bool = False,

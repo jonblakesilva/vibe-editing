@@ -1,0 +1,231 @@
+"""Local dashboard API (binds to 127.0.0.1 only). Long work runs as background jobs
+whose real progress the page polls."""
+from __future__ import annotations
+
+import json
+import shutil
+import time
+from pathlib import Path
+
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse
+
+from .. import brand as brand_mod
+from .. import config, pipeline
+from .. import plan as plan_mod
+from .. import project as proj_mod
+from ..jobs import JobManager
+
+app = FastAPI(title="Vibe Studio")
+STATIC = Path(__file__).parent / "static"
+jobs: JobManager | None = None
+
+
+def jm() -> JobManager:
+    global jobs
+    if jobs is None:
+        config.ensure_dirs()
+        jobs = JobManager()
+    return jobs
+
+
+def _err(e: Exception, code: int = 400):
+    raise HTTPException(code, config.redact(str(e)))
+
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    return (STATIC / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/static/{name}")
+def static(name: str):
+    p = (STATIC / name).resolve()
+    if p.parent != STATIC.resolve() or not p.exists():
+        raise HTTPException(404)
+    return FileResponse(p)
+
+
+# ------------------------------------------------------------ projects
+
+@app.get("/api/projects")
+def projects():
+    return proj_mod.list_projects()
+
+
+@app.post("/api/projects")
+async def create_project(file: UploadFile | None = File(None), path: str | None = Form(None),
+                         name: str | None = Form(None), brand: str | None = Form(None),
+                         mode: str = Form("longform")):
+    try:
+        if file is not None and file.filename:
+            up = config.DATA_HOME / "uploads"
+            up.mkdir(parents=True, exist_ok=True)
+            dst = up / f"{time.strftime('%Y%m%d-%H%M%S')}_{Path(file.filename).name}"
+            with open(dst, "wb") as f:  # streamed in chunks; never held in memory
+                while chunk := await file.read(4 * 1024 * 1024):
+                    f.write(chunk)
+            src = dst
+        elif path:
+            src = Path(path.strip('"')).expanduser()
+            if src.is_dir():
+                vids = proj_mod.find_videos(src)
+                if not vids:
+                    raise FileNotFoundError(f"No videos found in {src}")
+                src = vids[0]
+        else:
+            raise ValueError("Choose a video file or paste a file/folder path.")
+        return proj_mod.create(src, name=name or None, brand=brand or None, mode=mode)
+    except Exception as e:
+        _err(e)
+
+
+@app.get("/api/projects/{pid}")
+def get_project(pid: str):
+    try:
+        proj = proj_mod.load(pid)
+    except Exception as e:
+        _err(e, 404)
+    p = pipeline.paths(proj["id"])
+    plan = json.loads(p["plan"].read_text(encoding="utf-8")) if p["plan"].exists() else None
+    segments = None
+    if plan:
+        tl = plan_mod.timeline(plan)
+        segments = tl.segments
+        plan["stats"] = plan_mod.stats(plan)
+    exports = sorted(str(x.relative_to(p["exports"])).replace("\\", "/") for x in p["exports"].rglob("*")
+                     if x.is_file() and ".part." not in x.name)
+    return {"project": proj, "plan": plan, "segments": segments,
+            "plan_md": (p["dir"] / "plan.md").read_text(encoding="utf-8") if (p["dir"] / "plan.md").exists() else None,
+            "exports": exports}
+
+
+@app.get("/api/projects/{pid}/transcript")
+def get_transcript(pid: str):
+    p = pipeline.paths(pid)
+    if not p["transcript"].exists():
+        return {"words": []}
+    t = json.loads(p["transcript"].read_text(encoding="utf-8"))
+    corr = p["work"] / "corrections.json"
+    if corr.exists():
+        from .. import transcribe
+        transcribe.apply_corrections(t, json.loads(corr.read_text(encoding="utf-8")))
+    return {"words": t["words"], "engine": t.get("engine"), "language": t.get("language")}
+
+
+@app.post("/api/projects/{pid}/correct")
+def correct(pid: str, body: dict = Body(...)):
+    p = pipeline.paths(pid)["work"] / "corrections.json"
+    data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    data[str(int(body["index"]))] = str(body["text"])
+    p.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/plan")
+def make_plan(pid: str, body: dict = Body(default={})):
+    pid = proj_mod.resolve_id(pid)
+    opts = {k: body[k] for k in ("caption_style", "pace", "video_type", "topic", "cold_open") if body.get(k)}
+    return jm().submit("plan", pid, pipeline.make_plan, pid=pid, mode=body.get("mode"),
+                       outputs=body.get("outputs") or None, shorts_count=int(body.get("shorts_count", 5)),
+                       short_min=float(body.get("short_min", 20)), short_max=float(body.get("short_max", 60)),
+                       options=opts)
+
+
+@app.post("/api/projects/{pid}/revise")
+def revise(pid: str, body: dict = Body(...)):
+    try:
+        plan, ops = pipeline.revise(pid, request=body.get("request", ""), ops=body.get("ops"), at=body.get("at"))
+    except Exception as e:
+        _err(e)
+    return {"applied": ops, "version": plan["version"], "understood": bool(ops)}
+
+
+@app.post("/api/projects/{pid}/approve")
+def approve(pid: str):
+    return pipeline.approve(pid)
+
+
+@app.post("/api/projects/{pid}/render")
+def render(pid: str, body: dict = Body(default={})):
+    pid = proj_mod.resolve_id(pid)
+    quality = "final" if body.get("quality") == "final" else "preview"
+    what = body.get("what", "main")
+    if quality == "final":
+        plan = json.loads(pipeline.paths(pid)["plan"].read_text(encoding="utf-8"))
+        if plan["status"] not in ("approved", "rendered"):
+            raise HTTPException(409, "Approve the plan before the final render.")
+    fn = pipeline.render_shorts if what == "shorts" else pipeline.render_main
+    return jm().submit(f"render-{what}-{quality}", pid, fn, pid=pid, quality=quality)
+
+
+@app.get("/media/{pid}/{kind}/{rel:path}")
+def media(pid: str, kind: str, rel: str):
+    p = pipeline.paths(pid)
+    if kind == "source":
+        f = Path(proj_mod.load(pid)["source"]["path"])
+    elif kind == "exports":
+        base = p["exports"].resolve()
+        f = (base / rel).resolve()
+        if base not in f.parents:
+            raise HTTPException(403)
+    else:
+        raise HTTPException(404)
+    if not f.exists():
+        raise HTTPException(404)
+    return FileResponse(f)  # supports Range requests for seeking
+
+
+# ------------------------------------------------------------ jobs
+
+@app.get("/api/jobs")
+def list_jobs(project: str | None = None):
+    return jm().list(project)
+
+
+@app.post("/api/jobs/{jid}/cancel")
+def cancel(jid: str):
+    return {"cancelled": jm().cancel(jid)}
+
+
+@app.post("/api/jobs/{jid}/retry")
+def retry(jid: str):
+    try:
+        return jm().retry(jid)
+    except Exception as e:
+        _err(e)
+
+
+# ------------------------------------------------------------ brands
+
+@app.get("/api/brands")
+def brands():
+    return brand_mod.list_brands()
+
+
+@app.post("/api/brands")
+def new_brand(body: dict = Body(...)):
+    b = brand_mod.create(body["name"])
+    return {"brand": b, "next": brand_mod.next_question(b)}
+
+
+@app.get("/api/brands/{slug}")
+def get_brand(slug: str):
+    b = brand_mod.load(slug)
+    return {"brand": b, "next": brand_mod.next_question(b)}
+
+
+@app.post("/api/brands/{slug}/answer")
+def answer(slug: str, body: dict = Body(...)):
+    try:
+        b = brand_mod.answer(brand_mod.load(slug), body["key"], body["value"])
+    except Exception as e:
+        _err(e)
+    return {"brand": b, "next": brand_mod.next_question(b)}
+
+
+@app.get("/api/status")
+def status():
+    from .. import motion
+    return {"motion_graphics": motion.available(), "data_home": str(config.DATA_HOME),
+            "ffmpeg": shutil.which("ffmpeg") is not None}

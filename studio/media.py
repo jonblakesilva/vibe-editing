@@ -102,6 +102,24 @@ def probe(path: str | Path) -> MediaInfo:
     )
 
 
+def stream_durations(path: str | Path) -> dict:
+    """Per-stream durations in seconds ({'video': x, 'audio': y}); reads MKV DURATION tags too."""
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                          "stream=codec_type,duration:stream_tags=DURATION", "-of", "json", str(path)],
+                         capture_output=True, text=True)
+    res = {}
+    for st in json.loads(out.stdout or "{}").get("streams", []):
+        d = st.get("duration")
+        if d in (None, "N/A"):
+            tag = (st.get("tags") or {}).get("DURATION")
+            if tag:
+                h, m, sec = tag.split(":")
+                d = int(h) * 3600 + int(m) * 60 + float(sec)
+        if d not in (None, "N/A") and st.get("codec_type") not in res:
+            res[st["codec_type"]] = float(d)
+    return res
+
+
 def run_ffmpeg(args: list[str], *, duration: float | None = None,
                on_progress: Callable[[float], None] | None = None,
                cancel: threading.Event | None = None, cwd: str | None = None,
