@@ -104,6 +104,7 @@ video { width: 100%; background: #000; border-radius: var(--radius-lg); max-heig
 
 .comments { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 1rem; margin-top: 1rem; }
 .comments label { font-weight: 600; }
+.comments button { white-space: nowrap; }
 .comment-list { list-style: none; margin: 0.6rem 0 0; padding: 0; display: flex; flex-direction: column; }
 .comment-list li { display: grid; grid-template-columns: auto 1fr auto; gap: 0.6rem; align-items: start; padding: 0.55rem 0; border-top: 1px solid var(--line); }
 .comment-list li[data-s="resolved"], .comment-list li[data-s="applied"] { color: var(--muted); }
