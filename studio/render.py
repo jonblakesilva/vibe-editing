@@ -94,11 +94,29 @@ def measure_loudness(path: Path, pre: str, target: float) -> dict | None:
     return data
 
 
+def rnnoise_model() -> Path | None:
+    """Speech noise-removal model for FFmpeg's arnndn (free, BSD-3; see ~/VibeStudio/models/rnnoise)."""
+    from . import config
+    p = config.DATA_HOME / "models" / "rnnoise" / "std.rnnn"
+    return p if p.exists() else None
+
+
+def _filter_path(p: Path) -> str:
+    return "'" + str(p).replace("\\", "/").replace(":", r"\:") + "'"
+
+
 def audio_chain(audio: dict, cut: Path) -> str:
     pre = ""
-    if audio.get("clean", True):
+    level = audio.get("denoise", "light")
+    if audio.get("clean", True) and level == "studio" and rnnoise_model():
+        # "studio sound": speech-trained noise removal, a little residual hiss removal, less mud,
+        # more presence, softer S sounds and gentle compression for an even voice
+        pre += (f"highpass=f=80,arnndn=m={_filter_path(rnnoise_model())}:mix=0.9,afftdn=nf=-30:tn=1,"
+                "equalizer=f=200:t=q:w=1:g=-2,equalizer=f=3500:t=q:w=1.2:g=2.5,deesser=i=0.4,"
+                "acompressor=threshold=-21dB:ratio=3:attack=8:release=160:makeup=2,")
+    elif audio.get("clean", True):
         pre += "highpass=f=75,"
-        nf = {"off": None, "light": -28, "medium": -22, "strong": -16}.get(audio.get("denoise", "light"))
+        nf = {"off": None, "light": -28, "medium": -22, "strong": -16, "studio": -22}.get(level)
         if nf is not None:
             pre += f"afftdn=nf={nf}:tn=1,"
     if audio.get("normalize", True):

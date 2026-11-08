@@ -205,7 +205,7 @@ def build(project: dict, transcript: dict, *, brand: dict, mode: str = "longform
         "broll": [],
         "reframe": {"mode": "auto", "vertical_zoom": brand.get("recurring", {}).get("vertical_zoom", "medium")},
         "logo_bug": dict(brand.get("recurring", {}).get("logo_bug") or {"enabled": False}),  # auto | largest | split | center (vertical/square crops)
-        "audio": {"clean": True, "denoise": "light", "normalize": True, "target_lufs": -14.0,
+        "audio": {"clean": True, "denoise": options.get("denoise") or brand.get("denoise") or "studio", "normalize": True, "target_lufs": -14.0,
                   "music": _brand_music(brand),
                   "sfx": {"enabled": bool(brand.get("recurring", {}).get("sound_effects")), "level_db": -18}},
         "outputs": [dict(PLATFORM_OUTPUTS[o], name=o) for o in (outputs or (

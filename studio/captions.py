@@ -108,6 +108,8 @@ def caption_band(width: int, height: int, style: dict) -> dict:
     cy = height * (0.735 if vertical else 0.905)
     if style.get("position") == "top":
         cy = height * (0.16 if vertical else 0.1)
+    elif style.get("position") == "middle":
+        cy = height * 0.5  # e.g. on the seam of a screen-over-camera split
     pad_y = size * 0.32
     return {"cy": cy, "size": size, "top": cy - size * 0.62 - pad_y, "bottom": cy + size * 0.62 + pad_y}
 
@@ -119,6 +121,10 @@ def build_premium(words: list[dict], style: dict, *, width: int, height: int, of
     from . import fontmetrics
     band = caption_band(width, height, style)
     size, cy = band["size"], band["cy"]
+    # split layouts: captions on the seam (middle) only while the screen is split; where the camera
+    # is full-screen they return to the normal band
+    split = style.get("split_windows")
+    normal_cy = caption_band(width, height, dict(style, position="auto"))["cy"]
     font = style.get("font", "Outfit Bold")
     spacing = size * 0.01
     primary = ass_color(style.get("primary", "#FFFFFF"))
@@ -187,11 +193,15 @@ def build_premium(words: list[dict], style: dict, *, width: int, height: int, of
                 cx = max(cx, left + tw / 2 + pad_x)
                 cx = min(cx, right - tw / 2 - pad_x)
         x0, x1 = cx - tw / 2 - pad_x, cx + tw / 2 + pad_x
-        y0, y1 = cy - size * 0.62 - pad_y, cy + size * 0.62 + pad_y
+        ccy = cy
+        if split is not None:
+            mid = (ch[0]["start"] + ch[-1]["end"]) / 2
+            ccy = height * 0.5 if any(a <= mid <= b for a, b in split) else normal_cy
+        y0, y1 = ccy - size * 0.62 - pad_y, ccy + size * 0.62 + pad_y
         box_tags = r"{\fad(90,70)\pos(0,0)\p1}"
         body.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Box,,0,0,0,,{box_tags}"
                     f"{_rounded_rect(x0, y0, x1, y1, radius)}" + r"{\p0}")
-        pos = "{\\pos(%.1f,%.1f)}" % (cx, cy)
+        pos = "{\\pos(%.1f,%.1f)}" % (cx, ccy)
         for wi, w in enumerate(ch):
             ws = start if wi == 0 else w["start"] + offset
             we = ch[wi + 1]["start"] + offset if wi + 1 < len(ch) else end

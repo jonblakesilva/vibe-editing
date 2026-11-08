@@ -180,7 +180,8 @@ def render_main(pid: str, *, quality: str = "preview", progress=_noop,
         gfx = render.graphics_for_output(plan, tl, _spec_for(out, quality), p["work"] / "motion",
                                          face_x=fsum["cx"] if fsum else None, face_w=fsum["w"] if fsum else None)
         src, laid_out = _source_for(plan, out)
-        info = render.finish(cut_for(src), _layout_plan(plan) if laid_out else plan, tl, words, out, out_path,
+        oplan = _layout_plan(plan, tl) if laid_out else _landscape_layout_plan(plan)
+        info = render.finish(cut_for(src), oplan, tl, words, out, out_path,
                              p["work"], quality=quality, graphics=gfx, faces=[] if laid_out else faces,
                              progress=progress, cancel=cancel)
         rep = render.verify(out_path, expect_w=info["width"], expect_h=info["height"], expect_dur=tl.duration)
@@ -299,7 +300,7 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
             if src not in cuts:
                 cuts[src] = render.render_cut(src, segs, p["work"], fps=fps, quality=quality, progress=sub, cancel=cancel)
             cut = cuts[src]
-            oplan, ofaces = (_layout_plan(splan), []) if laid_out else (splan, faces)
+            oplan, ofaces = (_layout_plan(splan, tl), []) if laid_out else (splan, faces)
             info = render.finish(cut, oplan, tl, words, out, out_path, p["work"], quality=quality,
                                  graphics=gfx, faces=ofaces, burn_captions=True, progress=sub, cancel=cancel)
             rep = render.verify(out_path, expect_w=info["width"], expect_h=info["height"], expect_dur=tl.duration)
@@ -340,9 +341,30 @@ def _source_for(plan: dict, out: dict) -> tuple[str, bool]:
     return plan["source"]["path"], False
 
 
-def _layout_plan(plan: dict) -> dict:
-    """Captions sit on the seam between screen and camera in the vertical layout."""
-    return dict(plan, captions=dict(plan["captions"], position="middle"))
+def _layout_plan(plan: dict, tl: Timeline | None = None) -> dict:
+    """Captions sit on the seam between screen and camera in the vertical layout, and go back
+    to the normal band (below the face) while the camera is full-screen."""
+    cap = dict(plan["captions"], position="middle")
+    cams = plan["source"].get("cam_ranges") or []
+    if tl is not None and cams:
+        full = [s for a, b in cams if (s := tl.span_to_edit(a, min(b, plan["source"]["duration"])))]
+        split, t = [], 0.0
+        for a, b in sorted(full):
+            if a > t:
+                split.append((t, a))
+            t = max(t, b)
+        if t < tl.duration:
+            split.append((t, tl.duration))
+        cap["split_windows"] = split
+    return dict(plan, captions=cap)
+
+
+def _landscape_layout_plan(plan: dict) -> dict:
+    """Screen + camera landscape: the camera bubble owns the bottom-right corner, so the logo
+    moves to the top-right."""
+    if plan["source"].get("layout") != "screencam" or not (plan.get("logo_bug") or {}).get("enabled"):
+        return plan
+    return dict(plan, logo_bug=dict(plan["logo_bug"], position="top-right"))
 
 
 def _faces_on_timeline(faces: list[dict], tl: Timeline) -> list[dict]:

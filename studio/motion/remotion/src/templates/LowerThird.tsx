@@ -18,14 +18,16 @@ export const LowerThird: React.FC<LowerThirdProps> = (p) => {
   const nameS = spring({frame: frame - 5, fps, config: {damping: 18, stiffness: 120}});
   const roleS = spring({frame: frame - 10, fps, config: {damping: 18, stiffness: 120}});
   const left = p.width * (vertical ? 0.07 : 0.06);
-  // stays above the caption band (captions occupy ~8-14% from the bottom in 16:9, ~27-33% in 9:16)
-  const bottom = p.height * (vertical ? 0.355 : 0.062);  // 16:9: same band as captions (captions slide right while it shows)
+  // 16:9: same band as captions (captions slide right while it shows).
+  // 9:16: in the space above the speaker's head (zoomed-out framing puts the head lower), below
+  // the platform's top bar, so it never covers the face or the captions.
+  const place = vertical ? {top: p.height * 0.165} : {bottom: p.height * 0.062};
   const nameSize = (vertical ? 58 : 54) * u;
   return (
     <Fill>
       <div
         style={{
-          position: 'absolute', left, bottom,
+          position: 'absolute', left, ...place,
           transform: `translateX(${interpolate(inS, [0, 1], [-60 * u, 0]) - out * 40 * u}px)`,
           opacity: interpolate(inS, [0, 0.4], [0, 1], {extrapolateRight: 'clamp'}) * (1 - out),
           display: 'flex', alignItems: 'stretch',

@@ -3,7 +3,8 @@
 Builds two "layout masters" from one or more takes, both with identical timing and the
 camera's audio, so the normal cut/finish pipeline can render them like any recording:
 
-- landscape (1920x1080): the screen across the top with a rounded camera bubble bottom-left,
+- landscape (1920x1080): a full-frame 16:9 window of the screen (panned by keyframes) with a
+  rounded camera bubble bottom-right,
   switching to full-screen camera during `cam_ranges` (intro, outro).
 - vertical (1080x1920): the screen on top, the camera below, with a thin brand-colored seam
   where captions sit; full-height camera during `cam_ranges`.
@@ -37,6 +38,17 @@ def _between(ranges: list[tuple[float, float]]) -> str:
     return "+".join(f"between(t,{s:.3f},{e:.3f})" for s, e in ranges) or "0"
 
 
+def _keyframes(keys: list[tuple[float, float]] | None, default: float = 0.5) -> str:
+    """Piecewise-linear expression of t from (time, value) keyframes; value 0 = left edge of the
+    screen recording, 1 = right edge, 0.5 = centred."""
+    keys = sorted(keys or [(0.0, default)])
+    expr = f"{keys[-1][1]:.4f}"
+    for (t0, v0), (t1, v1) in reversed(list(zip(keys, keys[1:]))):
+        ramp = f"{v0:.4f}+({v1 - v0:.4f})*(t-{t0:.3f})/{max(t1 - t0, 0.001):.3f}"
+        expr = f"if(lt(t,{t1:.3f}),{ramp},{expr})"
+    return f"if(lt(t,{keys[0][0]:.3f}),{keys[0][1]:.4f},{expr})"
+
+
 def find_takes(folder: Path) -> list[tuple[Path, Path]]:
     """(camera, screen) pairs from a Tella raw export: one sub-folder per clip, in order."""
     takes = []
@@ -51,6 +63,7 @@ def find_takes(folder: Path) -> list[tuple[Path, Path]]:
 def build_masters(takes: list[tuple[Path, Path]], out_dir: Path, *, cam_ranges: list[tuple[float, float]],
                   bg: str = "#0F1E4A", accent: str = "#F97316", face_x: float = 0.47,
                   screen_crop_bottom: float = 0.045, vertical_screen_width: float = 0.47,
+                  screen_x: list[tuple[float, float]] | None = None,
                   limit: float | None = None, progress: Callable[[float], None] | None = None,
                   cancel: threading.Event | None = None) -> tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -61,7 +74,7 @@ def build_masters(takes: list[tuple[Path, Path]], out_dir: Path, *, cam_ranges: 
     total = sum(durs)
     bgc = bg.replace("#", "0x")
     acc = accent.replace("#", "0x")
-    bub = 290
+    bub = 300
     bmask = _mask(out_dir / "bubble_mask.png", bub, bub, 36)
     args, f = [], []
     for c, s in takes:
@@ -80,17 +93,16 @@ def build_masters(takes: list[tuple[Path, Path]], out_dir: Path, *, cam_ranges: 
     f.append("[C]split=4[C1][C2][C3][C4]")
     f.append("[S]split=2[S1][S2]")
     cam_on = _between(cam_ranges)
-    # landscape: screen top, rounded camera bubble bottom-left, full camera during cam_ranges
-    sw = LAND[0] - 80
-    f.append(f"color=c={bgc}:s=1920x1080:r={FPS}:d={total:.3f}[LB]")
-    f.append(f"[S1]scale={sw}:-2:flags=lanczos[S1s]")
-    f.append("[LB][S1s]overlay=x=40:y=40:shortest=1[L1]")
+    # landscape: a full-frame 16:9 window of the screen (panning with `screen_x` keyframes so the
+    # part being shown stays in view), rounded camera bubble bottom-right, full camera in cam_ranges
+    f.append(f"[S1]crop=w=ih*16/9:h=ih:x='(iw-ow)*({_keyframes(screen_x)})':y=0,"
+             f"scale=1920:1080:flags=lanczos,setsar=1[L1]")
     side = 760
     cx = int(max(0, min(1920 - side, face_x * 1920 - side / 2)))
     f.append(f"[C2]crop={side}:{side}:{cx}:{1080 - side - 40},scale={bub}:{bub}[Cb]")
     f.append(f"[{m}:v]format=gray,scale={bub}:{bub}[bm]")
     f.append("[Cb][bm]alphamerge[Cbm]")
-    f.append(f"[L1][Cbm]overlay=x=40:y={LAND[1] - 20 - bub}:shortest=1[L2]")
+    f.append(f"[L1][Cbm]overlay=x={LAND[0] - 32 - bub}:y={LAND[1] - 32 - bub}:shortest=1[L2]")
     f.append(f"[L2][C1]overlay=enable='{cam_on}'[L]")
     # vertical: screen on top (centre of the page), camera below, accent seam at mid-height
     seam = VERT[1] // 2

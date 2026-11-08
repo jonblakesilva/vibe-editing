@@ -60,3 +60,14 @@ def test_retakes_keep_only_the_last_attempt():
     # "We've got local service pages / We've got location pages": similar openings without a
     # reset pause are normal speech, not retakes
     assert all(c["end"] < 20 for c in cuts)
+
+
+def test_premium_captions_sit_on_the_seam_only_while_split():
+    from studio import captions
+    style = {"box": "rounded", "size": 50, "font": "Outfit Bold", "split_windows": [(2.0, 4.0)]}
+    words = [{"word": "Full", "start": 0.0, "end": 0.4}, {"word": "camera.", "start": 0.4, "end": 0.8},
+             {"word": "Split", "start": 2.5, "end": 2.9}, {"word": "screen.", "start": 2.9, "end": 3.3}]
+    ass = captions.build_premium(words, style, width=1080, height=1920)
+    ys = [float(line.split("\pos(")[1].split(",")[1].split(")")[0]) for line in ass.splitlines()
+          if line.startswith("Dialogue: 1")]
+    assert ys[0] > 1300 and ys[-1] == 960.0
