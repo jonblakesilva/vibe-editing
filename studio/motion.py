@@ -55,6 +55,28 @@ def brand_props(plan: dict) -> dict:
             "brand": b["name"], "tagline": b.get("tagline", "")}
 
 
+def stage_images(props: dict) -> dict:
+    """Copy image files referenced by props (cards[].image, image, logo) into the Remotion
+    public folder, so templates can load them; returns props with relative paths."""
+    def stage(path: str) -> str:
+        p = Path(path).expanduser()
+        if not p.is_file():
+            return path  # already relative to public/ (or missing; the template shows a text card)
+        digest = hashlib.sha256(p.read_bytes()).hexdigest()[:12]
+        dst = REMOTION_DIR / "public" / "staged" / f"{digest}{p.suffix.lower()}"
+        if not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, dst)
+        return f"staged/{dst.name}"
+    props = dict(props)
+    if isinstance(props.get("cards"), list):
+        props["cards"] = [dict(c, image=stage(c["image"])) if c.get("image") else c for c in props["cards"]]
+    for k in ("image",):
+        if props.get(k):
+            props[k] = stage(props[k])
+    return props
+
+
 def render_overlay(graphic: dict, plan: dict, out_spec: dict, cache_dir: Path) -> Path | None:
     if graphic["template"] == "File":
         # A ready-made transparent overlay (e.g. rendered with HyperFrames: --format mov).
@@ -68,7 +90,7 @@ def render_overlay(graphic: dict, plan: dict, out_spec: dict, cache_dir: Path) -
         _status["skipped"] = _status.get("skipped", 0) + 1
         return None
     fps = int(round(plan["source"].get("fps") or 30))
-    props = {**brand_props(plan), **graphic.get("props", {}), "placement": graphic.get("placement", "overlay")}
+    props = {**brand_props(plan), **stage_images(graphic.get("props", {})), "placement": graphic.get("placement", "overlay")}
     payload = {"template": graphic["template"], "props": props, "w": out_spec["width"], "h": out_spec["height"],
                "fps": fps, "duration": graphic["duration"], "code": templates_hash()}
     key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:14]

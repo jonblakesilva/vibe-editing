@@ -207,7 +207,10 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
         # automatic tight-pace cuts plus every cut the editor added or kept in the plan
         plan_cuts = [c for c in plan["cuts"] if c.get("enabled", True) and
                      c["type"] in ("manual", "restart", "repeat", "false_start", "noise")]
-        window_cuts = [dict(c) for c in analysis["cuts"] + plan_cuts
+        # bad-take decisions come from the plan (the editor may have restored a take);
+        # the tight Shorts pass only adds pause / filler / dead-air trims
+        pacing = [c for c in analysis["cuts"] if c["type"] in ("pause", "filler", "dead_air")]
+        window_cuts = [dict(c) for c in pacing + plan_cuts
                        if c["end"] > clip["start"] and c["start"] < clip["end"]]
         for k in plan.get("keep_overrides", []):
             window_cuts = plan_mod._subtract(window_cuts, k["start"], k["end"])
@@ -229,7 +232,8 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
             out = dict(plan_mod.PLATFORM_OUTPUTS[out_name], name=out_name)
             base = f"short{k + 1:02d}_{_safe(clip['title'])}_{out_name}{'_preview' if quality == 'preview' else ''}"
             out_path = p["exports"] / "shorts" / f"{base}.mp4"
-            gfx = render.graphics_for_output(splan, tl, _spec_for(out, quality), p["work"] / "motion")
+            gfx = render.graphics_for_output(splan, tl, _spec_for(out, quality), p["work"] / "motion",
+                                             clip_window=(0, tl.duration))
             info = render.finish(cut, splan, tl, words, out, out_path, p["work"], quality=quality,
                                  graphics=gfx, faces=faces, burn_captions=True, progress=sub, cancel=cancel)
             rep = render.verify(out_path, expect_w=info["width"], expect_h=info["height"], expect_dur=tl.duration)
@@ -256,7 +260,8 @@ def _shorts_caption_style(plan: dict) -> dict:
 
 def _short_graphics(plan: dict, clip: dict) -> list[dict]:
     g = [x for x in plan.get("graphics", []) if x.get("enabled", True) and clip["start"] <= x["start"] < clip["end"]
-         and x["template"] in ("KineticTitle", "Callout", "CallToAction")]
+         and x["template"] in ("KineticTitle", "EditorialTitle", "Callout", "CallToAction", "StatPanels",
+                               "FloatingCards", "EndCard", "File")]
     return g
 
 
