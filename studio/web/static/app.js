@@ -1,5 +1,16 @@
-// Vibe Studio dashboard. Plain JS; every number shown comes from the API.
+// Vibe Studio dashboard. Plain JS, no pop-up dialogs (browsers inside VS Code block them).
+// Every number shown comes from the API.
+window.addEventListener('error', (e) => {
+  fetch('/api/clientlog', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({page: location.pathname, msg: String(e.message), src: e.filename, line: e.lineno})}).catch(() => {});
+});
+window.addEventListener('unhandledrejection', (e) => {
+  fetch('/api/clientlog', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({page: location.pathname, msg: String(e.reason && e.reason.message || e.reason)})}).catch(() => {});
+});
+
 const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 const fmt = (t) => {
   if (t == null) return '-';
@@ -7,484 +18,540 @@ const fmt = (t) => {
   const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = (t % 60).toFixed(1).padStart(4, '0');
   return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 };
+const mins = (s) => (s >= 60 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${Math.round(s)} s`);
 const api = async (url, opts = {}) => {
-  const r = await fetch(url, opts.body && !(opts.body instanceof FormData)
-    ? {...opts, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(opts.body)} : opts);
+  const init = opts.body && !(opts.body instanceof FormData)
+    ? {...opts, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(opts.body)} : opts;
+  const r = await fetch(url, init);
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.detail || `Request failed (${r.status})`);
   return data;
 };
+const say = (el, text, kind = '') => { el.textContent = text; el.className = `msg ${kind}`; };
+const store = {get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }};
 
-const state = {pid: null, data: null, words: [], jobsTimer: null, activeJobs: new Set()};
+const S = {pid: null, data: null, words: [], comments: [], music: {music: [], sfx: []}, jobsTimer: null, active: new Set(), source: 'source'};
 
-// ---------------------------------------------------------------- theme
-const savedTheme = (() => { try { return localStorage.getItem('vs-theme'); } catch { return null; } })();
-if (savedTheme) document.documentElement.dataset.theme = savedTheme;
-const syncThemeBtn = () => { $('#themeBtn').textContent = document.documentElement.dataset.theme === 'light' ? 'Dark mode' : 'Light mode'; };
+// ------------------------------------------------------------ theme
+if (store.get('vs-theme') === 'dark') document.documentElement.dataset.theme = 'dark';
+const syncTheme = () => { $('#themeBtn').textContent = document.documentElement.dataset.theme === 'dark' ? 'Light mode' : 'Dark mode'; };
 $('#themeBtn').onclick = () => {
-  const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-  document.documentElement.dataset.theme = t;
-  try { localStorage.setItem('vs-theme', t); } catch {}
-  syncThemeBtn();
+  const dark = document.documentElement.dataset.theme !== 'dark';
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  store.set('vs-theme', dark ? 'dark' : 'light');
+  syncTheme();
 };
-syncThemeBtn();
+syncTheme();
 
-// ---------------------------------------------------------------- projects
-async function loadProjects() {
-  const list = await api('/api/projects');
-  $('#projectList').innerHTML = list.map((p) => `
-    <a href="#${esc(p.id)}" data-id="${esc(p.id)}" ${p.id === state.pid ? 'aria-current="true"' : ''}>
-      ${esc(p.name)}<small>${(p.source.duration / 60).toFixed(1)} min - ${esc(p.status)}</small></a>`).join('');
-  $('#empty').hidden = !!state.pid;
-  return list;
+// ------------------------------------------------------------ routing
+window.addEventListener('hashchange', route);
+async function route() {
+  const pid = decodeURIComponent(location.hash.slice(1));
+  if (pid) await openProject(pid); else await showHome();
 }
-$('#projectList').onclick = (e) => {
-  const a = e.target.closest('a');
-  if (a) { e.preventDefault(); openProject(a.dataset.id); }
+
+// ------------------------------------------------------------ library
+const statusInfo = (p) => ({
+  imported: ['Imported', 'Create the plan'], transcribed: ['Transcribed', 'Create the plan'],
+  planned: ['Plan ready', 'Make a preview'], previewed: ['Preview ready', 'Review and approve'],
+  rendered: ['Finished', 'Download'],
+}[p.status] || [p.status, 'Open']);
+
+async function showHome() {
+  S.pid = null;
+  clearTimeout(S.jobsTimer);
+  $('#project').hidden = true;
+  $('#home').hidden = false;
+  $('#crumbs').innerHTML = '';
+  const list = await api('/api/projects');
+  $('#library').innerHTML = list.map((p) => {
+    const [label, next] = statusInfo(p);
+    return `<button class="vcard" data-id="${esc(p.id)}">
+      <div class="thumb" style="background-image:url('/api/projects/${encodeURIComponent(p.id)}/thumb.jpg')"></div>
+      <div class="body">
+        <span class="title">${esc(p.name)}</span>
+        <span class="meta">${mins(p.source.duration)} recording${p.brand ? ` - ${esc(p.brand.replace(/-/g, ' '))}` : ''}</span>
+        <span><span class="chip ${p.status === 'rendered' ? 'ok' : 'accent'}">${esc(label)}</span></span>
+        <span class="nextstep">Next: ${esc(next)}</span>
+      </div></button>`;
+  }).join('') + `<button class="vcard add" id="addCard">+ Add a recording</button>`;
+}
+$('#library').onclick = (e) => {
+  if (e.target.closest('#addCard')) return openNew();
+  const c = e.target.closest('.vcard[data-id]');
+  if (c) location.hash = c.dataset.id;
 };
 
+// ------------------------------------------------------------ project
 async function openProject(pid) {
-  state.pid = pid;
-  history.replaceState(null, '', `#${pid}`);
-  $('#empty').hidden = true;
-  $('#workspace').hidden = false;
+  if (S.pid !== pid) S.source = '';  // start on the latest edit, not the raw original
+  S.pid = pid;
+  $('#home').hidden = true;
+  $('#project').hidden = false;
+  window.scrollTo(0, 0);
+  try { S.music = await api('/api/music'); } catch {}
   await refresh();
-  await loadProjects();
   pollJobs();
 }
 
 async function refresh() {
-  const d = await api(`/api/projects/${state.pid}`);
-  state.data = d;
+  const d = await api(`/api/projects/${encodeURIComponent(S.pid)}`);
+  S.data = d;
   const {project: p, plan} = d;
+  $('#crumbs').innerHTML = `<a href="#" id="toHome">All videos</a> / ${esc(p.name)}`;
+  $('#toHome').onclick = (e) => { e.preventDefault(); location.hash = ''; };
   $('#projName').textContent = p.name;
   const st = plan?.stats;
   $('#projMeta').textContent = st
-    ? `${fmt(st.source_duration)} recording, about ${fmt(st.edited_duration)} after edits. ${plan.summary.video_type.replace('_', ' ')}, ${plan.mode === 'repurpose' ? 'full video + Shorts' : plan.mode}.`
-    : `${fmt(p.source.duration)} recording, ${p.source.width}x${p.source.height}. No plan yet.`;
-  $('#planStatus').textContent = plan ? `Plan ${plan.status}, v${plan.version}` : 'No plan';
-  $('#planStatus').dataset.s = plan?.status || '';
-  const approved = plan && ['approved', 'rendered'].includes(plan.status);
-  $('#approveBtn').hidden = !plan || approved;
-  $('#renderBtn').hidden = !approved;
-  $('#previewBtn').disabled = !plan;
-  const hasVideos = (state.data.exports || []).some((x) => x.endsWith('.mp4'));
-  $('#reviewLink').href = `/review/${encodeURIComponent(state.pid)}`;
-  $('#reviewLink').setAttribute('aria-disabled', !hasVideos);
-  $('#reviewLink').title = hasVideos ? 'Frame.io-style review: comment, draw, compare versions, approve' : 'Make a preview first';
-  setupPlayer();
-  await loadComments();
+    ? `${mins(st.source_duration)} recording, about ${mins(st.edited_duration)} after the edit (${Math.round(st.removed_seconds)} s of mistakes and pauses removed).`
+    : `${mins(p.source.duration)} recording. No editing plan yet.`;
+  S.comments = await api(`/api/projects/${encodeURIComponent(S.pid)}/comments`).catch(() => []);
+  renderSteps();
+  renderSources();
   drawStrip();
-  renderPlan();
+  renderNext();
+  renderEdit();
   renderStyle();
   renderShorts();
-  renderExports();
+  renderFiles();
+  renderNotes();
   if (plan) loadTranscript();
 }
 
-// ---------------------------------------------------------------- player + strip
-function setupPlayer() {
-  const {project: p, exports} = state.data;
-  const sel = $('#playerSource');
+function progressState() {
+  const {plan, exports} = S.data;
   const vids = exports.filter((x) => x.endsWith('.mp4'));
-  const cur = sel.value;
-  sel.innerHTML = `<option value="source">Original recording</option>` +
-    vids.map((v) => `<option value="${esc(v)}">${esc(v.replace(/_/g, ' ').replace('.mp4', ''))}</option>`).join('');
-  if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  const previews = vids.filter((x) => x.includes('_preview'));
+  const finals = vids.filter((x) => !x.includes('_preview'));
+  const approved = plan && ['approved', 'rendered'].includes(plan.status);
+  return {plan: !!plan, preview: previews.length > 0, approved, final: finals.length > 0 && plan?.status === 'rendered', vids, finals};
+}
+
+function renderSteps() {
+  const s = progressState();
+  const steps = [['Import', true], ['Plan', s.plan], ['Preview', s.preview], ['Approve', s.approved], ['Final videos', s.final]];
+  let nowSet = false;
+  $('#steps').innerHTML = steps.map(([name, done]) => {
+    let cls = done ? 'done' : '';
+    if (!done && !nowSet) { cls = 'now'; nowSet = true; }
+    return `<li class="${cls}">${name}</li>`;
+  }).join('');
+}
+
+// player sources as chips
+function sourceLabel(f) {
+  if (f === 'source') return 'Original';
+  const prev = f.includes('_preview') ? ' (preview)' : '';
+  if (f.startsWith('shorts/')) {
+    const m = f.match(/short(\d+)_/);
+    return `Short ${m ? +m[1] : ''}${f.includes('_clean') ? ' no captions' : ''}${prev}`;
+  }
+  if (f.includes('_youtube')) return `YouTube 16:9${prev}`;
+  if (f.includes('_shorts')) return `Vertical 9:16${prev}`;
+  if (f.includes('_square')) return `Square${prev}`;
+  return f;
+}
+function renderSources() {
+  const vids = progressState().vids;
+  const list = ['source', ...vids.sort((a, b) => a.startsWith('shorts/') - b.startsWith('shorts/') || a.localeCompare(b))];
+  if (!list.includes(S.source)) S.source = list.find((f) => f.includes('_youtube') && !f.includes('_preview')) || list.find((f) => f.includes('_youtube')) || 'source';
+  $('#sourceChips').innerHTML = list.map((f) => `<button type="button" role="tab" data-src="${esc(f)}" aria-selected="${f === S.source}">${esc(sourceLabel(f))}</button>`).join('');
   loadPlayer();
 }
+$('#sourceChips').onclick = (e) => {
+  const b = e.target.closest('[data-src]');
+  if (!b) return;
+  S.source = b.dataset.src;
+  $$('#sourceChips button').forEach((x) => x.setAttribute('aria-selected', x === b));
+  loadPlayer();
+};
 function loadPlayer() {
-  const v = $('#playerSource').value;
-  const url = v === 'source' ? `/media/${state.pid}/source/file` : `/media/${state.pid}/exports/${encodeURI(v)}`;
-  if ($('#player').dataset.src !== url) { $('#player').src = url; $('#player').dataset.src = url; }
+  const url = S.source === 'source' ? `/media/${encodeURIComponent(S.pid)}/source/file`
+    : `/media/${encodeURIComponent(S.pid)}/exports/${S.source.split('/').map(encodeURIComponent).join('/')}`;
+  const v = $('#player');
+  if (v.dataset.src !== url) { v.src = url; v.dataset.src = url; }
 }
-$('#playerSource').onchange = loadPlayer;
-const sourceTime = () => ($('#playerSource').value === 'source' ? $('#player').currentTime : null);
+const srcTime = () => (S.source === 'source' ? $('#player').currentTime : null);
 
 function drawStrip() {
-  const {project: p, segments, plan} = state.data;
+  const {project: p, segments, plan} = S.data;
   const dur = p.source.duration || 1;
-  const strip = $('#strip');
   const segs = segments || [[0, dur]];
-  strip.innerHTML = segs.map(([a, b]) =>
-    `<div class="seg" style="left:${(a / dur) * 100}%;width:${((b - a) / dur) * 100}%" title="${fmt(a)} - ${fmt(b)} kept"></div>`).join('') +
-    (plan?.chapters || []).map((c) => `<div class="mark" style="left:${(c.start / dur) * 100}%" title="${esc(c.title)}"></div>`).join('') +
-    (state.comments || []).filter((c) => c.source_at != null && c.status === 'open').map((c) =>
-      `<div class="cmark" data-t="${c.source_at}" style="left:${(c.source_at / dur) * 100}%" title="${esc(c.text)}"></div>`).join('') +
-    '<div class="head" id="head"></div>';
-  $('#stripTimes').textContent = plan ? `${segs.length} kept sections` : '';
+  $('#strip').innerHTML = segs.map(([a, b]) => `<div class="seg" style="left:${(a / dur) * 100}%;width:${((b - a) / dur) * 100}%" title="Kept ${fmt(a)} - ${fmt(b)}"></div>`).join('')
+    + S.comments.filter((c) => c.source_at != null && c.status === 'open' && !c.parent).map((c) =>
+      `<div class="mark" data-t="${c.source_at}" style="left:${(c.source_at / dur) * 100}%" title="${esc(c.text)}"></div>`).join('')
+    + '<div class="head" id="head"></div>';
+  $('#stripInfo').textContent = plan ? `${segs.length} kept parts of the original` : '';
 }
 $('#strip').onclick = (e) => {
-  if (e.target.dataset.t) { seekSource(parseFloat(e.target.dataset.t)); return; }
+  if (e.target.dataset.t) return seekSource(parseFloat(e.target.dataset.t));
   const r = e.currentTarget.getBoundingClientRect();
-  seekSource(((e.clientX - r.left) / r.width) * state.data.project.source.duration);
+  seekSource(((e.clientX - r.left) / r.width) * S.data.project.source.duration);
 };
 function seekSource(t) {
-  if ($('#playerSource').value !== 'source') { $('#playerSource').value = 'source'; loadPlayer(); }
-  const pl = $('#player');
-  const go = () => { pl.currentTime = t; pl.play().catch(() => {}); };
-  pl.readyState >= 1 ? go() : pl.addEventListener('loadedmetadata', go, {once: true});
+  if (S.source !== 'source') { S.source = 'source'; renderSources(); }
+  const v = $('#player');
+  const go = () => { v.currentTime = t; v.play().catch(() => {}); };
+  v.readyState >= 1 ? go() : v.addEventListener('loadedmetadata', go, {once: true});
 }
-// ---------------------------------------------------------------- comments
-async function loadComments() {
-  state.comments = await api(`/api/projects/${state.pid}/comments`);
-  const label = (c) => (c.file === 'source' ? 'Original' : c.file.replace(/_/g, ' ').replace('.mp4', ''));
-  const list = [...state.comments].sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || a.at - b.at);
-  $('#commentList').innerHTML = list.length ? list.map((c) => `<li data-s="${esc(c.status)}">
-      <a class="tlink" data-cfile="${esc(c.file)}" data-cat="${c.at}">${fmt(c.at)}</a>
-      <div>${esc(c.text)}<span class="where">${esc(label(c))}${c.status !== 'open' ? ` - ${esc(c.status)}` : ''}</span>
-        ${c.resolution ? `<span class="res">${esc(c.resolution)}</span>` : ''}</div>
-      <div class="acts">${c.status === 'open'
-        ? `<button type="button" data-capply="${esc(c.id)}" title="Change the plan if this is a request like 'remove that zoom'">Apply</button>
-           <button type="button" data-cdone="${esc(c.id)}">Resolve</button>`
-        : `<button type="button" data-creopen="${esc(c.id)}">Reopen</button>`}
-        <button type="button" data-cdel="${esc(c.id)}" aria-label="Delete comment">Delete</button></div></li>`).join('')
-    : '<li><span></span><span class="meta">No comments yet. Claude reads open comments when you ask it to work through them.</span><span></span></li>';
-}
-const currentFile = () => $('#playerSource').value;
-$('#commentForm').onsubmit = async (e) => {
-  e.preventDefault();
-  const text = $('#commentText').value.trim();
-  if (!text) { $('#reviseMsg').textContent = ''; $('#commentText').placeholder = 'Type your note here first'; $('#commentText').focus(); return; }
-  const at = $('#player').currentTime;
-  try {
-    await api(`/api/projects/${state.pid}/comments`, {method: 'POST', body: {text, at, file: currentFile()}});
-  } catch (err) { alert(`Couldn't save the comment: ${err.message}`); return; }
-  $('#commentText').value = '';
-  $('#commentText').placeholder = `Saved at ${fmt(at)}. Add another, or open Review videos for drawing and threads.`;
-  await loadComments();
-  drawStrip();
-};
-$('#commentList').onclick = async (e) => {
-  const t = e.target;
-  if (t.dataset.cat) {
-    const f = t.dataset.cfile;
-    if ($('#playerSource').value !== f && [...$('#playerSource').options].some((o) => o.value === f)) { $('#playerSource').value = f; loadPlayer(); }
-    const pl = $('#player');
-    const go = () => { pl.currentTime = parseFloat(t.dataset.cat); pl.pause(); };
-    pl.readyState >= 1 ? go() : pl.addEventListener('loadedmetadata', go, {once: true});
-    return;
-  }
-  const act = t.dataset.capply ? ['apply', t.dataset.capply] : t.dataset.cdone ? ['resolved', t.dataset.cdone]
-    : t.dataset.creopen ? ['open', t.dataset.creopen] : t.dataset.cdel ? ['delete', t.dataset.cdel] : null;
-  if (!act) return;
-  const [what, id] = act;
-  const body = what === 'apply' || what === 'delete' ? {action: what} : {status: what, resolution: what === 'resolved' ? 'Marked done' : null};
-  const r = await api(`/api/projects/${state.pid}/comments/${id}`, {method: 'POST', body});
-  if (what === 'apply') {
-    $('#reviseMsg').textContent = r.status === 'applied' ? 'Comment applied to the plan. Make a preview to see it.'
-      : 'That one needs Claude: ask "work through my comments" in VS Code.';
-    await refresh();
-  } else { await loadComments(); drawStrip(); }
-};
-
-$('#player').ontimeupdate = () => {
-  $('#commentBtn').textContent = `Add at ${fmt($('#player').currentTime)}`;
-  const t = sourceTime();
-  const head = $('#head');
-  if (head) head.style.display = t == null ? 'none' : 'block';
-  if (t != null && head) head.style.left = `${(t / state.data.project.source.duration) * 100}%`;
-  const now = document.querySelector('.transcript span.now');
+$('#player').addEventListener('timeupdate', () => {
+  const v = $('#player');
+  $('#noteTime').textContent = fmt(v.currentTime);
+  const t = srcTime(), head = $('#head');
+  if (head) { head.style.display = t == null ? 'none' : 'block'; if (t != null) head.style.left = `${(t / S.data.project.source.duration) * 100}%`; }
+  const now = $('.transcript span.now');
   if (now) now.classList.remove('now');
-  if (t != null && state.words.length) {
-    const i = state.words.findIndex((w) => w.start <= t && t <= w.end + 0.05);
-    if (i >= 0) document.querySelector(`.transcript span[data-i="${i}"]`)?.classList.add('now');
+  if (t != null && S.words.length) {
+    const i = S.words.findIndex((w) => w.start <= t && t <= w.end + 0.05);
+    if (i >= 0) $(`.transcript span[data-i="${i}"]`)?.classList.add('now');
   }
-};
+});
 
-// ---------------------------------------------------------------- tabs
-document.querySelector('.tabs').onclick = (e) => {
-  const b = e.target.closest('button');
-  if (!b) return;
-  document.querySelectorAll('.tabs button').forEach((x) => x.setAttribute('aria-selected', x === b));
-  document.querySelectorAll('.tabpanel').forEach((x) => (x.hidden = x.id !== `tab-${b.dataset.tab}`));
-};
-
-// ---------------------------------------------------------------- plan tab
-function renderPlan() {
-  const {plan} = state.data;
-  const el = $('#tab-plan');
-  if (!plan) {
-    el.innerHTML = `<p>No editing plan yet.</p><button class="primary" id="planNow">Create the editing plan</button>
-      <p class="hint">Transcribes the recording on this computer, finds mistakes and long pauses, and proposes cuts for you to review.</p>`;
-    $('#planNow').onclick = () => startPlan({mode: state.data.project.mode});
-    return;
+// ------------------------------------------------------------ next step
+function renderNext() {
+  const s = progressState();
+  const {plan} = S.data;
+  const reviewUrl = `/review/${encodeURIComponent(S.pid)}`;
+  const busy = $('#jobs').dataset.busy === '1';
+  let html;
+  if (!s.plan) {
+    html = card('Step 2', 'Create the editing plan', 'I transcribe the recording on this computer, find mistakes, retakes and long pauses, and suggest cuts, captions and graphics for you to check.',
+      `<button class="primary big" id="doPlan" ${busy ? 'disabled' : ''}>Create the editing plan</button>`);
+  } else if (!s.preview) {
+    html = card('Step 3', 'Make a preview', 'A quick, smaller version so you can watch the edit before anything is final.',
+      `<button class="primary big" id="doPreview" ${busy ? 'disabled' : ''}>Make a preview</button>`);
+  } else if (!s.approved) {
+    html = card('Step 4', 'Review and approve', 'Watch the preview, leave notes or drawings in the review screen, then approve when you are happy.',
+      `<a class="primary big" href="${reviewUrl}">Open review screen</a>
+       <div class="alt"><button class="secondary" id="doApprove">Approve the plan</button><button class="secondary" id="doPreview" ${busy ? 'disabled' : ''}>New preview</button></div>`);
+  } else if (!s.final) {
+    html = card('Step 5', 'Make the final videos', 'Full quality 1080p versions of everything, checked automatically before they are marked ready.',
+      `<button class="primary big" id="doFinal" ${busy ? 'disabled' : ''}>Render final videos</button>
+       <div class="alt"><a class="secondary" href="${reviewUrl}">Open review screen</a></div>`);
+  } else {
+    html = card('Done', 'Your videos are ready', 'Download them below, or keep refining: any change makes a new version you can compare.',
+      `<button class="primary big" id="goFiles">See downloads</button>
+       <div class="alt"><a class="secondary" href="${reviewUrl}">Open review screen</a></div>`);
   }
-  const s = plan.summary;
-  const hook = s.suggested_hook;
-  el.innerHTML = `
-    <p><strong>Topic:</strong> ${esc(s.topic)}</p>
-    ${hook ? `<p><strong>Suggested hook</strong> <a class="tlink" data-t="${hook.start}">${fmt(hook.start)}</a>: "${esc(hook.text)}"</p>` : ''}
-    ${s.intro_suggestions.map((t) => `<p class="meta">${esc(t)}</p>`).join('')}
-    <h3>Cuts</h3>
-    <p class="meta">Untick a cut to keep that part. Click a time to watch it.</p>
-    <table><thead><tr><th>Cut</th><th>From</th><th>To</th><th>Why</th></tr></thead><tbody>
-    ${plan.cuts.map((c) => `<tr class="${c.enabled === false ? 'off' : ''}">
-      <td><input type="checkbox" class="toggle" data-id="${esc(c.id)}" ${c.enabled !== false ? 'checked' : ''} aria-label="Cut ${esc(c.id)}"></td>
-      <td class="t"><a data-t="${c.start}">${fmt(c.start)}</a></td><td class="t">${fmt(c.end)}</td>
-      <td>${esc(c.text ? `${c.type.replace('_', ' ')}: "${c.text}"` : c.reason)}</td></tr>`).join('')}
-    </tbody></table>
-    ${plan.mode !== 'shorts' && plan.chapters?.length ? `<h3>Chapters</h3>${plan.chapters.map((c) =>
-      `<p><a class="tlink" data-t="${c.start}">${fmt(c.start)}</a> ${esc(c.title)}</p>`).join('')}` : ''}
-    <h3>Re-plan</h3>
-    <div class="row"><select id="replanMode">
-      <option value="longform">Full edited video</option><option value="repurpose">Full video + Shorts</option><option value="shorts">One short video</option>
-    </select><button id="replanBtn">Rebuild plan</button></div>
-    <p class="hint">Rebuilding replaces manual changes. Use "Ask for a change" for small edits.</p>`;
-  $('#replanMode').value = plan.mode;
-  $('#replanBtn').onclick = () => startPlan({mode: $('#replanMode').value});
-  el.onclick = (e) => { const a = e.target.closest('[data-t]'); if (a) seekSource(parseFloat(a.dataset.t)); };
-  el.onchange = async (e) => {
-    if (!e.target.classList.contains('toggle')) return;
-    await revise({ops: [{op: 'toggle', id: e.target.dataset.id, enabled: e.target.checked}],
-      request: `${e.target.checked ? 'Cut' : 'Keep'} ${e.target.dataset.id}`});
-  };
+  $('#nextCard').innerHTML = html;
+  $('#doPlan')?.addEventListener('click', () => startPlan({mode: S.data.project.mode}));
+  $('#doPreview')?.addEventListener('click', () => renderAll('preview'));
+  $('#doFinal')?.addEventListener('click', () => renderAll('final'));
+  $('#doApprove')?.addEventListener('click', async () => { await api(`/api/projects/${encodeURIComponent(S.pid)}/approve`, {method: 'POST'}); refresh(); });
+  $('#goFiles')?.addEventListener('click', () => selectTab('files'));
+  void plan;
 }
+const card = (label, title, text, actions) => `<div class="label">${label}</div><h2>${title}</h2><p>${text}</p>${actions}`;
 
 async function startPlan(opts) {
-  const job = await api(`/api/projects/${state.pid}/plan`, {method: 'POST', body: opts});
-  state.activeJobs.add(job.id);
+  const job = await api(`/api/projects/${encodeURIComponent(S.pid)}/plan`, {method: 'POST', body: opts});
+  S.active.add(job.id);
+  pollJobs();
+}
+async function renderAll(quality) {
+  const plan = S.data.plan;
+  try {
+    const j1 = await api(`/api/projects/${encodeURIComponent(S.pid)}/render`, {method: 'POST', body: {quality, what: 'main'}});
+    S.active.add(j1.id);
+    if (plan?.clips?.length) {
+      const j2 = await api(`/api/projects/${encodeURIComponent(S.pid)}/render`, {method: 'POST', body: {quality, what: 'shorts'}});
+      S.active.add(j2.id);
+    }
+  } catch (err) { say($('#askMsg'), err.message, 'err'); }
   pollJobs();
 }
 
-// ---------------------------------------------------------------- transcript
-async function loadTranscript() {
-  const t = await api(`/api/projects/${state.pid}/transcript`);
-  state.words = t.words || [];
-  const segs = state.data.segments || [];
-  const kept = (w) => segs.some(([a, b]) => a <= (w.start + w.end) / 2 && (w.start + w.end) / 2 <= b);
-  $('#tab-transcript').innerHTML = state.words.length ? `
-    <p class="meta">Click a word to jump there. Double-click to fix a mis-heard word (timing stays the same). Crossed-out words are cut; dotted words were unclear to the transcriber.</p>
-    <div class="transcript">${state.words.map((w, i) =>
-      `<span data-i="${i}" class="${kept(w) ? '' : 'cut'} ${w.prob < 0.5 ? 'low' : ''}">${esc(w.word)}</span>`).join(' ')}</div>`
-    : '<p>The transcript appears here once the plan is created.</p>';
-  const tr = $('.transcript');
-  if (!tr) return;
-  tr.onclick = (e) => { const s = e.target.closest('span'); if (s) seekSource(state.words[s.dataset.i].start); };
-  tr.ondblclick = async (e) => {
-    const s = e.target.closest('span');
-    if (!s) return;
-    const fixed = prompt('Correct this word:', state.words[s.dataset.i].word);
-    if (fixed == null || !fixed.trim()) return;
-    await api(`/api/projects/${state.pid}/correct`, {method: 'POST', body: {index: +s.dataset.i, text: fixed.trim()}});
-    s.textContent = fixed.trim();
-    $('#reviseMsg').textContent = 'Word corrected. It will appear in the next preview.';
-  };
-}
-
-// ---------------------------------------------------------------- captions & graphics
-function renderStyle() {
-  const {plan} = state.data;
-  const el = $('#tab-style');
-  if (!plan) { el.innerHTML = '<p>Available once the plan exists.</p>'; return; }
-  const c = plan.captions;
-  el.innerHTML = `<div class="settings">
-    <label><span><input type="checkbox" class="toggle" id="capOn" ${c.enabled ? 'checked' : ''}> Burn captions into the video</span></label>
-    <label>Caption style<select id="capStyle">
-      <option value="premium">Premium - one line on a rounded brand panel</option>
-      <option value="clean_shadow">Clean shadow - white text, soft shadow, no box</option>
-      <option value="punch">Punch - big 2-3 word captions (Hormozi style)</option>
-      <option value="clean">Clean - sentence captions for teaching</option>
-      <option value="minimal">Minimal - small boxed text</option>
-      <option value="karaoke">Highlight - current word lights up</option>
-      <option value="bold">Bold - big punchy words for Shorts</option></select></label>
-    <label>Size <input type="range" id="capSize" min="0.5" max="1.8" step="0.05" value="${c.size_scale}"></label>
-    <label>Position<select id="capPos"><option value="auto">Automatic (avoids faces and app buttons)</option>
-      <option value="bottom">Bottom</option><option value="lower">Lower third</option><option value="middle">Middle</option><option value="top">Top</option></select></label>
-    <label>Highlight color <input type="color" id="capColor" value="${c.highlight || '#FFD400'}"></label>
-    <h3>Motion graphics</h3>
-    ${plan.graphics.length ? plan.graphics.map((g) => `<label><span><input type="checkbox" class="toggle gfx" data-id="${esc(g.id)}" ${g.enabled !== false ? 'checked' : ''}>
-      ${esc(g.template.replace(/([a-z])([A-Z])/g, '$1 $2'))} at <a class="tlink" data-t="${g.start}">${fmt(g.start)}</a>
-      ${g.props.text || g.props.title || g.props.name ? `- "${esc(g.props.text || g.props.title || g.props.name)}"` : ''}${g.placement === 'behind' ? ' (behind you)' : ''}</span></label>`).join('')
-      : '<p class="meta">No graphics planned. Ask for one, e.g. "Add a title behind me saying THE BOOKED SOLID SYSTEM".</p>'}
-    <h3>Zooms</h3>
-    ${plan.zooms.length ? plan.zooms.map((z) => `<label><span><input type="checkbox" class="toggle zm" data-id="${esc(z.id)}" ${z.enabled !== false ? 'checked' : ''}>
-      ${z.kind === 'ease' ? 'Slow push' : 'Punch-in'} ${Math.round((z.scale - 1) * 100)}% at <a class="tlink" data-t="${z.start}">${fmt(z.start)}</a></span></label>`).join('')
-      : '<p class="meta">No zooms (screen recordings stay unzoomed so text is readable).</p>'}
-    <h3>Audio</h3>
-    <label>Noise reduction<select id="denoise"><option value="off">Off</option><option value="light">Light</option><option value="medium">Medium</option><option value="strong">Strong</option></select></label>
-    <label><span><input type="checkbox" class="toggle" id="normOn" ${plan.audio.normalize ? 'checked' : ''}> Even out loudness (${plan.audio.target_lufs} LUFS, YouTube standard)</span></label>
-    <h3>Exports</h3>
-    ${['youtube', 'youtube_4k', 'shorts', 'square'].map((o) => `<label><span><input type="checkbox" class="toggle outp" value="${o}" ${plan.outputs.some((x) => x.name === o) ? 'checked' : ''}>
-      ${{youtube: 'YouTube 1080p (16:9)', youtube_4k: 'YouTube 4K (16:9)', shorts: 'Vertical 1080x1920 (9:16)', square: 'Square 1080 (1:1)'}[o]}</span></label>`).join('')}
-  </div>`;
-  $('#capStyle').value = c.style;
-  $('#capPos').value = c.position;
-  $('#denoise').value = plan.audio.denoise;
-  const set = (path, value, label) => revise({ops: [{op: 'set', path, value}], request: label});
-  $('#capOn').onchange = (e) => set('captions.enabled', e.target.checked, 'Captions on/off');
-  $('#capStyle').onchange = (e) => revise({request: `${e.target.value} captions`});
-  $('#capSize').onchange = (e) => set('captions.size_scale', parseFloat(e.target.value), 'Caption size');
-  $('#capPos').onchange = (e) => set('captions.position', e.target.value, 'Caption position');
-  $('#capColor').onchange = (e) => set('captions.highlight', e.target.value.toUpperCase(), 'Caption highlight color');
-  $('#denoise').onchange = (e) => set('audio.denoise', e.target.value, 'Noise reduction');
-  $('#normOn').onchange = (e) => set('audio.normalize', e.target.checked, 'Loudness');
-  el.querySelectorAll('.gfx, .zm').forEach((cb) => (cb.onchange = () =>
-    revise({ops: [{op: 'toggle', id: cb.dataset.id, enabled: cb.checked}], request: `Toggle ${cb.dataset.id}`})));
-  el.querySelectorAll('.outp').forEach((cb) => (cb.onchange = () => {
-    const sizes = {youtube: [1920, 1080, '16:9'], youtube_4k: [3840, 2160, '16:9'], shorts: [1080, 1920, '9:16'], square: [1080, 1080, '1:1']};
-    const outs = [...el.querySelectorAll('.outp:checked')].map((x) => ({name: x.value, width: sizes[x.value][0], height: sizes[x.value][1], aspect: sizes[x.value][2]}));
-    if (outs.length) set('outputs', outs, 'Export formats');
-  }));
-  el.onclick = (e) => { const a = e.target.closest('[data-t]'); if (a) { e.preventDefault(); seekSource(parseFloat(a.dataset.t)); } };
-}
-
-// ---------------------------------------------------------------- shorts
-function renderShorts() {
-  const {plan} = state.data;
-  const el = $('#tab-shorts');
-  if (!plan?.clips?.length) {
-    el.innerHTML = `<p>No Shorts in this plan.</p><p class="meta">Rebuild the plan as "Full video + Shorts" to find the strongest stand-alone moments.</p>`;
-    return;
-  }
-  const names = {hook: 'Hook', value: 'Value', clarity: 'Clarity', relevance: 'Relevance', standalone: 'Stands alone', retention: 'Pacing', cta: 'CTA'};
-  el.innerHTML = `<p class="meta">Scores are editorial judgements, not predictions of views. Each Short starts and ends on full sentences.</p>
-    ${plan.clips.map((c, i) => `<div class="clip"><div class="top">
-      <label><input type="checkbox" class="toggle clipon" data-id="${esc(c.id)}" ${c.enabled !== false ? 'checked' : ''}> <strong>${i + 1}. ${esc(c.title)}</strong></label>
-      <span class="meta">${c.total.toFixed(1)} / 10</span></div>
-      <p class="meta"><a class="tlink" data-t="${c.start}">${fmt(c.start)}</a> - ${fmt(c.end)}, about ${Math.round(c.est_duration)} s</p>
-      <div class="scores">${Object.entries(c.scores).map(([k, v]) => `<div><b>${v}</b>${names[k]}</div>`).join('')}</div></div>`).join('')}
-    <div class="row" style="margin-top:1rem"><button id="shortPrev">Preview Shorts</button>
-      <button class="primary" id="shortFinal" ${['approved', 'rendered'].includes(plan.status) ? '' : 'disabled title="Approve the plan first"'}>Render Shorts</button></div>`;
-  el.onclick = (e) => { const a = e.target.closest('[data-t]'); if (a) seekSource(parseFloat(a.dataset.t)); };
-  el.querySelectorAll('.clipon').forEach((cb) => (cb.onchange = () =>
-    revise({ops: [{op: 'toggle', id: cb.dataset.id, enabled: cb.checked}], request: `Toggle short ${cb.dataset.id}`})));
-  $('#shortPrev').onclick = () => render('preview', 'shorts');
-  $('#shortFinal').onclick = () => render('final', 'shorts');
-}
-
-// ---------------------------------------------------------------- exports
-function renderExports() {
-  const {exports, plan} = state.data;
-  const el = $('#tab-exports');
-  const results = [...(plan?.last_render?.results || []), ...(plan?.last_shorts_render?.results || [])];
-  const check = (f) => results.find((r) => r.path.replace(/\\/g, '/').endsWith(f));
-  el.innerHTML = exports.length ? `<table><thead><tr><th>File</th><th>Check</th></tr></thead><tbody>
-    ${exports.map((f) => { const r = check(f); return `<tr><td><a href="/media/${state.pid}/exports/${encodeURI(f)}" target="_blank" rel="noopener">${esc(f)}</a></td>
-      <td>${r ? (r.ok ? `passed (${r.width}x${r.height}, ${r.video_duration.toFixed(1)} s)` : `failed: ${esc(Object.entries(r.checks).filter(([, v]) => !v).map(([k]) => k).join(', '))}`) : ''}</td></tr>`; }).join('')}
-    </tbody></table>
-    ${plan?.repurpose ? `<h3>Publishing drafts</h3><p class="meta">${esc(plan.repurpose.note)}</p>
-      <h3>Titles</h3>${plan.repurpose.titles.map((t) => `<p>${esc(t)}</p>`).join('')}
-      <h3>Description</h3><p style="white-space:pre-wrap">${esc(plan.repurpose.description)}</p>
-      <h3>Thumbnail ideas</h3>${plan.repurpose.thumbnail_concepts.map((t) => `<p>${esc(t)}</p>`).join('')}` : ''}
-    <p class="hint">Nothing is ever published automatically.</p>`
-    : '<p>Rendered videos, caption files and chapter lists appear here.</p>';
-}
-
-// ---------------------------------------------------------------- actions
-async function revise(body) {
-  try {
-    const r = await api(`/api/projects/${state.pid}/revise`, {method: 'POST', body});
-    $('#reviseMsg').textContent = r.understood
-      ? `Updated the plan (v${r.version}). Make a preview to see it.`
-      : "I couldn't turn that into a change here. Ask Claude in VS Code, or try wording like \"make the captions bigger\".";
-    await refresh();
-  } catch (e) { $('#reviseMsg').textContent = e.message; }
-}
-$('#reviseForm').onsubmit = (e) => {
-  e.preventDefault();
-  const text = $('#reviseText').value.trim();
-  if (!text) return;
-  revise({request: text, at: sourceTime()});
-  $('#reviseText').value = '';
-};
-$('#approveBtn').onclick = async () => { await api(`/api/projects/${state.pid}/approve`, {method: 'POST'}); refresh(); };
-$('#previewBtn').onclick = () => render('preview', state.data.plan?.mode === 'shorts' && state.data.plan?.clips?.length ? 'shorts' : 'main');
-$('#renderBtn').onclick = () => render('final', 'main');
-async function render(quality, what) {
-  try {
-    const job = await api(`/api/projects/${state.pid}/render`, {method: 'POST', body: {quality, what}});
-    state.activeJobs.add(job.id);
-    pollJobs();
-  } catch (e) { $('#reviseMsg').textContent = e.message; }
-}
-
-// ---------------------------------------------------------------- jobs (real progress)
+// ------------------------------------------------------------ jobs
 async function pollJobs() {
-  clearTimeout(state.jobsTimer);
-  if (!state.pid) return;
-  const list = (await api(`/api/jobs?project=${encodeURIComponent(state.data?.project?.id || state.pid)}`)).slice(0, 4);
-  const label = {plan: 'Transcribing and planning', 'render-main-preview': 'Preview', 'render-main-final': 'Final render',
-    'render-shorts-preview': 'Shorts preview', 'render-shorts-final': 'Shorts render'};
-  $('#jobs').innerHTML = list.map((j) => `<div class="job" data-s="${esc(j.status)}"><div class="top">
-      <span>${esc(label[j.kind] || j.kind)}: ${esc(j.status === 'running' ? `${j.stage} ${(j.progress * 100).toFixed(0)}%` : j.message)}</span>
-      ${j.status === 'running' || j.status === 'queued' ? `<button data-cancel="${esc(j.id)}">Cancel</button>` : ''}
-      ${['failed', 'interrupted', 'cancelled'].includes(j.status) ? `<button data-retry="${esc(j.id)}">Retry</button>` : ''}</div>
+  clearTimeout(S.jobsTimer);
+  if (!S.pid) return;
+  const list = (await api(`/api/jobs?project=${encodeURIComponent(S.data?.project?.id || S.pid)}`).catch(() => [])).slice(0, 3);
+  const label = {plan: 'Transcribing and planning', 'render-main-preview': 'Preview of the full video', 'render-main-final': 'Final full video',
+    'render-shorts-preview': 'Preview of the Shorts', 'render-shorts-final': 'Final Shorts'};
+  const recent = list.filter((j) => ['running', 'queued'].includes(j.status) || S.active.has(j.id) || ['failed', 'interrupted'].includes(j.status) && (Date.now() / 1000 - j.created) < 3600);
+  $('#jobs').innerHTML = recent.map((j) => `<div class="job" data-s="${esc(j.status)}">
+      <div class="top"><span>${esc(label[j.kind] || j.kind)}${j.status === 'running' ? ` - ${esc(j.stage)} ${(j.progress * 100).toFixed(0)}%` : j.status === 'queued' ? ' - waiting' : ` - ${esc(j.status)}`}</span>
+      ${['running', 'queued'].includes(j.status) ? `<button class="secondary" data-cancel="${esc(j.id)}">Cancel</button>` : ''}
+      ${['failed', 'interrupted', 'cancelled'].includes(j.status) ? `<button class="secondary" data-retry="${esc(j.id)}">Try again</button>` : ''}</div>
       <div class="bar"><i style="width:${(j.status === 'done' ? 1 : j.progress) * 100}%"></i></div>
       ${j.error ? `<p class="err">${esc(j.error)}</p>` : ''}</div>`).join('');
-  let changed = false;
-  for (const j of list) {
-    if (state.activeJobs.has(j.id) && !['running', 'queued'].includes(j.status)) { state.activeJobs.delete(j.id); changed = true; }
-  }
-  if (changed) await refresh();
   const busy = list.some((j) => ['running', 'queued'].includes(j.status));
-  state.jobsTimer = setTimeout(pollJobs, busy ? 1200 : 5000);
+  const wasBusy = $('#jobs').dataset.busy === '1';
+  $('#jobs').dataset.busy = busy ? '1' : '';
+  let changed = false;
+  for (const j of list) if (S.active.has(j.id) && !['running', 'queued'].includes(j.status)) { S.active.delete(j.id); changed = true; }
+  if (changed || wasBusy !== busy) await refresh();
+  S.jobsTimer = setTimeout(pollJobs, busy ? 1200 : 6000);
 }
 $('#jobs').onclick = async (e) => {
   const c = e.target.dataset.cancel, r = e.target.dataset.retry;
   if (c) await api(`/api/jobs/${c}/cancel`, {method: 'POST'});
-  if (r) { try { const j = await api(`/api/jobs/${r}/retry`, {method: 'POST'}); state.activeJobs.add(j.id); } catch (err) { $('#reviseMsg').textContent = err.message; } }
+  if (r) { try { const j = await api(`/api/jobs/${r}/retry`, {method: 'POST'}); S.active.add(j.id); } catch (err) { say($('#askMsg'), err.message, 'err'); } }
   pollJobs();
 };
 
-// ---------------------------------------------------------------- new video
+// ------------------------------------------------------------ tabs
+function selectTab(name) {
+  $$('.tabs button').forEach((x) => x.setAttribute('aria-selected', x.dataset.tab === name));
+  $$('.tabpanel').forEach((x) => (x.hidden = x.id !== `tab-${name}`));
+}
+$('.tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) selectTab(b.dataset.tab); };
+document.addEventListener('click', (e) => { const a = e.target.closest('[data-seek]'); if (a) { e.preventDefault(); seekSource(parseFloat(a.dataset.seek)); } });
+
+// Edit: cuts + transcript
+function renderEdit() {
+  const {plan} = S.data;
+  const el = $('#tab-edit');
+  if (!plan) { el.innerHTML = '<p class="muted">The list of suggested cuts appears here once the plan is made.</p>'; return; }
+  const s = plan.summary;
+  const typeName = {pause: 'long pause', filler: 'filler word', restart: 'restart', repeat: 'repeated take', false_start: 'false start',
+    noise: 'unclear sound', dead_air: 'silence', manual: 'your cut'};
+  el.innerHTML = `
+    ${s.suggested_hook ? `<p><b>Opening hook:</b> "${esc(s.suggested_hook.text)}" <a href="#" data-seek="${s.suggested_hook.start}">${fmt(s.suggested_hook.start)}</a></p>` : ''}
+    <h3>What gets removed</h3>
+    <p class="hint">Switch a cut off to keep that part. Click a time to watch it.</p>
+    <ul class="cuts">${plan.cuts.map((c) => `<li class="${c.enabled === false ? 'off' : ''}">
+      <input type="checkbox" class="switch" data-cut="${esc(c.id)}" ${c.enabled !== false ? 'checked' : ''} aria-label="Remove this part">
+      <button type="button" class="t" data-seek="${c.start}">${fmt(c.start)}</button>
+      <span class="what">${esc(c.text ? `"${c.text}"` : c.reason)}<span class="kind">${esc(typeName[c.type] || c.type)}, ${(c.end - c.start).toFixed(1)} s</span></span></li>`).join('')}</ul>
+    <h3>Transcript</h3>
+    <p class="hint">Click a word to jump there. Double-click a word to fix its spelling (timing stays the same).</p>
+    <div class="transcript" id="transcript"><span class="muted">Loading...</span></div>`;
+  el.onchange = async (e) => {
+    if (!e.target.dataset.cut) return;
+    await revise({ops: [{op: 'toggle', id: e.target.dataset.cut, enabled: e.target.checked}], request: `${e.target.checked ? 'Cut' : 'Keep'} ${e.target.dataset.cut}`});
+  };
+}
+async function loadTranscript() {
+  const t = await api(`/api/projects/${encodeURIComponent(S.pid)}/transcript`).catch(() => ({words: []}));
+  S.words = t.words || [];
+  const segs = S.data.segments || [];
+  const kept = (w) => segs.some(([a, b]) => a <= (w.start + w.end) / 2 && (w.start + w.end) / 2 <= b);
+  const el = $('#transcript');
+  if (!el) return;
+  el.innerHTML = S.words.map((w, i) => `<span data-i="${i}" class="${kept(w) ? '' : 'cut'}">${esc(w.word)}</span>`).join(' ');
+  el.onclick = (e) => { const s = e.target.closest('span[data-i]'); if (s) seekSource(S.words[s.dataset.i].start); };
+  el.ondblclick = (e) => {
+    const s = e.target.closest('span[data-i]');
+    if (!s) return;
+    const i = +s.dataset.i;
+    s.outerHTML = `<input class="inline-edit" data-fix="${i}" value="${esc(S.words[i].word)}">`;
+    const inp = $(`[data-fix="${i}"]`);
+    inp.focus(); inp.select();
+    const done = async (save) => {
+      const v = inp.value.trim();
+      if (save && v && v !== S.words[i].word) {
+        await api(`/api/projects/${encodeURIComponent(S.pid)}/correct`, {method: 'POST', body: {index: i, text: v}});
+        S.words[i].word = v;
+        say($('#askMsg'), 'Word fixed. It will show in the next preview.', 'ok');
+      }
+      loadTranscript();
+    };
+    inp.addEventListener('keydown', (k) => { if (k.key === 'Enter') done(true); if (k.key === 'Escape') done(false); });
+    inp.addEventListener('blur', () => done(true), {once: true});
+  };
+}
+
+// Style: captions, graphics, logo, music
+const STYLE_CARDS = [
+  ['premium', 'Premium', 'One clean line on a rounded brand panel', 'background:#0F1E4A;border-radius:6px;padding:4px 10px'],
+  ['clean_shadow', 'Clean shadow', 'White text, soft shadow, no box', 'text-shadow:0 2px 6px rgba(0,0,0,.6)'],
+  ['punch', 'Punch', 'Big 2-3 word captions, high energy', 'font-size:1rem;text-transform:uppercase;-webkit-text-stroke:1px #000'],
+  ['minimal', 'Minimal', 'Small boxed captions', 'background:rgba(0,0,0,.55);padding:2px 8px;font-weight:600'],
+];
+function renderStyle() {
+  const {plan} = S.data;
+  const el = $('#tab-style');
+  if (!plan) { el.innerHTML = '<p class="muted">Style options appear once the plan is made.</p>'; return; }
+  const c = plan.captions, bug = plan.logo_bug || {}, music = plan.audio?.music;
+  el.innerHTML = `
+    <h3 style="margin-top:0">Captions</h3>
+    <div class="styles">${STYLE_CARDS.map(([id, name, desc, css]) => `<button type="button" class="style-card" data-style="${id}" aria-pressed="${c.style === id}">
+      <span class="demo"><span style="${css}">Book <span style="color:${esc(c.highlight || '#F97316')}">more</span> jobs</span></span>
+      <span class="name">${name}</span><small>${desc}</small></button>`).join('')}</div>
+    <div class="setting" style="margin-top:.8rem"><span>Show captions</span><input type="checkbox" class="switch" id="capOn" ${c.enabled ? 'checked' : ''}></div>
+    <div class="setting"><span>Caption size</span><input type="range" id="capSize" min="0.6" max="1.6" step="0.05" value="${c.size_scale ?? 1}"></div>
+    <div class="setting"><span>Position</span><select id="capPos"><option value="auto">Automatic</option><option value="bottom">Bottom</option><option value="top">Top</option></select></div>
+    <div class="setting"><span>Highlight color</span><input type="color" id="capColor" value="${esc(c.highlight || '#F97316')}" style="width:3rem;height:2rem;padding:2px"></div>
+    <h3>Brand</h3>
+    <div class="setting"><span>Logo in the corner</span><input type="checkbox" class="switch" id="bugOn" ${bug.enabled ? 'checked' : ''}></div>
+    <h3>Music</h3>
+    <div class="setting"><span>Background music</span><select id="musicSel"><option value="">None</option>${(S.music.music || []).map((m) =>
+      `<option value="${esc(m.path)}" ${music && music.path === m.path ? 'selected' : ''}>${esc(m.title || m.file)}</option>`).join('')}</select></div>
+    ${(S.music.music || []).length ? '' : '<p class="hint">No licensed tracks downloaded yet.</p>'}
+    <div class="setting"><span>Music level (quieter - louder)</span><input type="range" id="musicVol" min="-24" max="-8" step="1" value="${music?.bed_db ?? -16}" ${music ? '' : 'disabled'}></div>
+    <div class="setting"><span>Sound effects on graphics</span><input type="checkbox" class="switch" id="sfxOn" ${plan.audio?.sfx?.enabled ? 'checked' : ''}></div>
+    <p class="hint">Music and sound effects are from Mixkit (free for monetized YouTube and social, no credit needed). The music dips automatically while you talk.</p>
+    <h3>Graphics</h3>
+    ${plan.graphics.length ? plan.graphics.map((g) => `<div class="setting"><span>${esc(g.template.replace(/([a-z])([A-Z])/g, '$1 $2'))}
+      <a href="#" data-seek="${g.start}">${fmt(g.start)}</a>${g.props.text || g.props.name ? ` <span class="muted">"${esc(g.props.text || g.props.name)}"</span>` : ''}</span>
+      <input type="checkbox" class="switch" data-gfx="${esc(g.id)}" ${g.enabled !== false ? 'checked' : ''}></div>`).join('') : '<p class="hint">No graphics yet. Ask for one, e.g. "add a title behind me saying 25,000 doors".</p>'}
+    <div class="setting"><span>Zooms (${plan.zooms.filter((z) => z.enabled !== false).length} of ${plan.zooms.length} on)</span>
+      <input type="checkbox" class="switch" id="zoomAll" ${plan.zooms.some((z) => z.enabled !== false) ? 'checked' : ''} ${plan.zooms.length ? '' : 'disabled'}></div>`;
+  $('#capPos').value = c.position || 'auto';
+  const set = (path, value, label) => revise({ops: [{op: 'set', path, value}], request: label});
+  el.querySelectorAll('[data-style]').forEach((b) => (b.onclick = () => revise({request: `${b.dataset.style.replace('_', ' ')} captions`})));
+  $('#capOn').onchange = (e) => set('captions.enabled', e.target.checked, 'Captions on/off');
+  $('#capSize').onchange = (e) => set('captions.size_scale', parseFloat(e.target.value), 'Caption size');
+  $('#capPos').onchange = (e) => set('captions.position', e.target.value, 'Caption position');
+  $('#capColor').onchange = (e) => set('captions.highlight', e.target.value.toUpperCase(), 'Caption highlight color');
+  $('#bugOn').onchange = (e) => set('logo_bug', {...(plan.logo_bug || {}), enabled: e.target.checked, position: (plan.logo_bug || {}).position || 'bottom-right'}, 'Logo on/off');
+  $('#musicSel').onchange = (e) => set('audio.music', e.target.value ? {path: e.target.value, bed_db: parseFloat($('#musicVol').value)} : null, 'Background music');
+  $('#musicVol').onchange = (e) => music && set('audio.music', {...music, bed_db: parseFloat(e.target.value)}, 'Music level');
+  $('#sfxOn').onchange = (e) => set('audio.sfx', {...(plan.audio?.sfx || {level_db: -18}), enabled: e.target.checked}, 'Sound effects');
+  el.querySelectorAll('[data-gfx]').forEach((cb) => (cb.onchange = () => revise({ops: [{op: 'toggle', id: cb.dataset.gfx, enabled: cb.checked}], request: `Graphic ${cb.dataset.gfx}`})));
+  $('#zoomAll').onchange = (e) => revise({ops: plan.zooms.map((z) => ({op: 'toggle', id: z.id, enabled: e.target.checked})), request: 'Zooms on/off'});
+}
+
+function renderShorts() {
+  const {plan} = S.data;
+  const el = $('#tab-shorts');
+  if (!plan?.clips?.length) { el.innerHTML = '<p class="muted">No Shorts in this plan. Choose "Full video + Shorts" when adding a recording.</p>'; return; }
+  const names = {hook: 'Hook', value: 'Value', clarity: 'Clarity', relevance: 'Fit', standalone: 'Alone', retention: 'Pace', cta: 'CTA'};
+  el.innerHTML = `<p class="hint" style="margin-top:0">Scores are an editor's judgement, not a prediction of views.</p>` + plan.clips.map((c, i) => `<div class="clip">
+      <div class="top"><span class="title">${i + 1}. ${esc(c.title)}</span><input type="checkbox" class="switch" data-clip="${esc(c.id)}" ${c.enabled !== false ? 'checked' : ''} aria-label="Include this Short"></div>
+      <p class="hint"><a href="#" data-seek="${c.start}">${fmt(c.start)}</a> - ${fmt(c.end)} - "${esc(c.hook)}"</p>
+      <div class="scores">${Object.entries(c.scores).map(([k, v]) => `<div><b>${v}</b>${names[k]}</div>`).join('')}</div></div>`).join('');
+  el.querySelectorAll('[data-clip]').forEach((cb) => (cb.onchange = () => revise({ops: [{op: 'toggle', id: cb.dataset.clip, enabled: cb.checked}], request: `Short ${cb.dataset.clip}`})));
+}
+
+function renderFiles() {
+  const {exports, plan} = S.data;
+  const el = $('#tab-files');
+  const files = exports.filter((f) => !f.startsWith('qa/'));
+  if (!files.length) { el.innerHTML = '<p class="muted">Finished videos, caption files and chapter lists appear here.</p>'; return; }
+  const results = [...(plan?.last_render?.results || []), ...(plan?.last_shorts_render?.results || [])];
+  const ok = (f) => results.find((r) => r.path.replace(/\\/g, '/').endsWith(f));
+  const kind = (f) => (f.endsWith('.mp4') ? 0 : f.endsWith('.md') || f.endsWith('.txt') ? 1 : 2);
+  el.innerHTML = `<ul class="files">${files.sort((a, b) => kind(a) - kind(b) || a.localeCompare(b)).map((f) => {
+    const r = ok(f);
+    return `<li><a href="/media/${encodeURIComponent(S.pid)}/exports/${f.split('/').map(encodeURIComponent).join('/')}" download>${esc(f.endsWith('.mp4') ? sourceLabel(f) : f)}</a>
+      ${r ? `<span class="chip ${r.ok ? 'ok' : ''}">${r.ok ? 'Checked' : 'Problem'}</span>` : `<span class="muted" style="font-size:.8rem">${esc(f.split('.').pop())}</span>`}</li>`;
+  }).join('')}</ul><p class="hint">Nothing is ever published automatically.</p>`;
+}
+
+// ------------------------------------------------------------ change requests
+async function revise(body) {
+  try {
+    const r = await api(`/api/projects/${encodeURIComponent(S.pid)}/revise`, {method: 'POST', body});
+    say($('#askMsg'), r.understood ? 'Updated. Make a new preview to see it.' : 'I could not turn that into a change here. Ask Claude in VS Code, or try wording like "make the captions bigger".', r.understood ? 'ok' : 'err');
+    await refresh();
+  } catch (err) { say($('#askMsg'), err.message, 'err'); }
+}
+$('#askForm').onsubmit = (e) => {
+  e.preventDefault();
+  const text = $('#askText').value.trim();
+  if (!text) { say($('#askMsg'), 'Type what you want changed first.', 'err'); return; }
+  revise({request: text, at: srcTime()});
+  $('#askText').value = '';
+};
+
+// ------------------------------------------------------------ notes (comments)
+function renderNotes() {
+  const tops = S.comments.filter((c) => !c.parent).sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || a.at - b.at);
+  $('#noteList').innerHTML = tops.map((c) => `<li class="${c.status !== 'open' ? 'done' : ''}">
+      <button type="button" class="t" data-nfile="${esc(c.file)}" data-nat="${c.at}">${fmt(c.at)}</button>
+      <span>${esc(c.text)}<span class="where">${esc(c.author || 'you')} - ${esc(sourceLabel(c.file))}${c.status !== 'open' ? ` - ${esc(c.status)}` : ''}</span>
+        ${c.resolution ? `<span class="res">${esc(c.resolution)}</span>` : ''}</span>
+      <span class="acts">${c.status === 'open' ? `<button type="button" data-ndone="${esc(c.id)}">Done</button>` : `<button type="button" data-nopen="${esc(c.id)}">Reopen</button>`}
+        <button type="button" data-ndel="${esc(c.id)}">Delete</button></span></li>`).join('')
+    || '<li><span></span><span class="muted">No notes yet. Pause the video, type a note, press Enter. For drawings and threads, use the review screen.</span><span></span></li>';
+}
+$('#noteForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const text = $('#noteText').value.trim();
+  if (!text) { say($('#noteMsg'), 'Type your note first.', 'err'); $('#noteText').focus(); return; }
+  const at = $('#player').currentTime;
+  try {
+    await api(`/api/projects/${encodeURIComponent(S.pid)}/comments`, {method: 'POST', body: {text, at, file: S.source, author: store.get('vs-author') || 'you'}});
+  } catch (err) { say($('#noteMsg'), `Could not save: ${err.message}`, 'err'); return; }
+  $('#noteText').value = '';
+  say($('#noteMsg'), `Note saved at ${fmt(at)}.`, 'ok');
+  S.comments = await api(`/api/projects/${encodeURIComponent(S.pid)}/comments`);
+  renderNotes();
+  drawStrip();
+};
+$('#noteList').onclick = async (e) => {
+  const t = e.target;
+  const base = `/api/projects/${encodeURIComponent(S.pid)}/comments`;
+  if (t.dataset.nat) {
+    if (S.source !== t.dataset.nfile && (t.dataset.nfile === 'source' || progressState().vids.includes(t.dataset.nfile))) { S.source = t.dataset.nfile; renderSources(); }
+    const v = $('#player');
+    const go = () => { v.currentTime = parseFloat(t.dataset.nat); v.pause(); };
+    v.readyState >= 1 ? go() : v.addEventListener('loadedmetadata', go, {once: true});
+    return;
+  }
+  if (t.dataset.ndel) {
+    if (t.dataset.armed !== '1') { t.dataset.armed = '1'; t.textContent = 'Sure?'; setTimeout(() => { t.dataset.armed = ''; t.textContent = 'Delete'; }, 3000); return; }
+    await api(`${base}/${t.dataset.ndel}`, {method: 'POST', body: {action: 'delete'}});
+  } else if (t.dataset.ndone) {
+    await api(`${base}/${t.dataset.ndone}`, {method: 'POST', body: {status: 'resolved', resolution: 'Marked done'}});
+  } else if (t.dataset.nopen) {
+    await api(`${base}/${t.dataset.nopen}`, {method: 'POST', body: {status: 'open', resolution: null}});
+  } else return;
+  S.comments = await api(base);
+  renderNotes();
+  drawStrip();
+};
+
+// ------------------------------------------------------------ new recording
 async function fillBrands(sel) {
   const bs = await api('/api/brands');
-  sel.innerHTML = '<option value="">No brand yet</option>' + bs.map((b) => `<option value="${esc(b.slug)}">${esc(b.name)}</option>`).join('');
+  sel.innerHTML = '<option value="">No brand</option>' + bs.map((b) => `<option value="${esc(b.slug)}">${esc(b.name)}</option>`).join('');
+  if (bs.length === 1) sel.value = bs[0].slug;
 }
-const openNew = async () => { await fillBrands($('#brandInput')); $('#newMsg').textContent = ''; $('#newDialog').showModal(); };
+async function openNew() { await fillBrands($('#brandInput')); say($('#newMsg'), ''); $('#newDialog').showModal(); }
 $('#newBtn').onclick = openNew;
-$('#emptyNew').onclick = openNew;
 const drop = $('#drop');
 ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
-drop.addEventListener('drop', (e) => { $('#fileInput').files = e.dataTransfer.files; $('#dropText').textContent = e.dataTransfer.files[0]?.name || ''; });
-$('#fileInput').onchange = () => { $('#dropText').textContent = $('#fileInput').files[0]?.name || ''; };
+drop.addEventListener('drop', (e) => { $('#fileInput').files = e.dataTransfer.files; $('#dropText').innerHTML = `<b>${esc(e.dataTransfer.files[0]?.name || '')}</b>`; });
+$('#fileInput').onchange = () => { $('#dropText').innerHTML = `<b>${esc($('#fileInput').files[0]?.name || '')}</b>`; };
 $('#newForm').onsubmit = async (e) => {
   if (e.submitter?.value === 'cancel') return;
   e.preventDefault();
-  const fd = new FormData();
   const f = $('#fileInput').files[0];
-  if (f) fd.append('file', f); else fd.append('path', $('#pathInput').value);
-  fd.append('mode', $('#modeInput').value);
+  if (!f && !$('#pathInput').value.trim()) { say($('#newMsg'), 'Choose a video file or paste a path first.', 'err'); return; }
+  const mode = $('input[name="mode"]:checked').value;
+  const fd = new FormData();
+  if (f) fd.append('file', f); else fd.append('path', $('#pathInput').value.trim());
+  fd.append('mode', mode);
   fd.append('brand', $('#brandInput').value);
   $('#createBtn').disabled = true;
-  $('#newMsg').textContent = f ? 'Copying the video into the studio...' : 'Importing...';
+  say($('#newMsg'), f ? 'Copying the video into the studio...' : 'Importing...');
   try {
     const p = await api('/api/projects', {method: 'POST', body: fd});
     const [mn, mx] = $('#shortLen').value.split(',').map(Number);
     $('#newDialog').close();
+    location.hash = p.id;
     await openProject(p.id);
-    await startPlan({mode: $('#modeInput').value, shorts_count: +$('#shortsCount').value, short_min: mn, short_max: mx});
-  } catch (err) { $('#newMsg').textContent = err.message; }
+    await startPlan({mode, shorts_count: +$('#shortsCount').value, short_min: mn, short_max: mx});
+  } catch (err) { say($('#newMsg'), err.message, 'err'); }
   $('#createBtn').disabled = false;
 };
 
-// ---------------------------------------------------------------- brands (one question at a time)
-async function showBrands(active) {
+// ------------------------------------------------------------ brands (one question at a time)
+async function showBrands() {
   const bs = await api('/api/brands');
-  $('#brandList').innerHTML = bs.length ? bs.map((b) => `<p><a class="tlink" data-slug="${esc(b.slug)}">${esc(b.name)}</a>
-    <span class="meta">${b.complete ? 'complete' : 'setup in progress'}</span></p>`).join('') : '<p class="meta">No brands yet.</p>';
-  if (active) askNext(active);
+  $('#brandList').innerHTML = bs.length ? bs.map((b) => `<div class="brand-row"><a href="#" class="tlink" data-slug="${esc(b.slug)}">${esc(b.name)}</a>
+    <span class="chip ${b.complete ? 'ok' : ''}">${b.complete ? 'Complete' : 'Setup in progress'}</span></div>`).join('') : '<p class="muted">No brands yet.</p>';
 }
 async function askNext(slug, next) {
-  if (!next) next = (await api(`/api/brands/${slug}`)).next;
-  $('#brandQ').innerHTML = next ? `<label>${esc(next[1])}<div class="row"><input id="brandAns"><button type="button" id="brandSave">Save</button>
-    <button type="button" id="brandSkip">Skip</button></div></label>` : '<p>This brand profile is complete.</p>';
+  if (next === undefined) next = (await api(`/api/brands/${slug}`)).next;
+  $('#brandQ').innerHTML = next ? `<label>${esc(next[1])}<div class="row"><input id="brandAns"><button type="button" class="secondary" id="brandSave">Save</button>
+    <button type="button" class="ghost" id="brandSkip">Skip</button></div></label>` : '<p class="msg ok">This brand is set up.</p>';
   if (!next) return;
   const save = async (value) => {
-    try {
-      const r = await api(`/api/brands/${slug}/answer`, {method: 'POST', body: {key: next[0], value}});
-      askNext(slug, r.next);
-      showBrands();
-    } catch (e) { $('#brandQ').insertAdjacentHTML('beforeend', `<p class="err">${esc(e.message)}</p>`); }
+    try { const r = await api(`/api/brands/${slug}/answer`, {method: 'POST', body: {key: next[0], value}}); askNext(slug, r.next); showBrands(); }
+    catch (err) { $('#brandQ').insertAdjacentHTML('beforeend', `<p class="msg err">${esc(err.message)}</p>`); }
   };
   $('#brandSave').onclick = () => save($('#brandAns').value);
   $('#brandSkip').onclick = () => save('skip');
   $('#brandAns').focus();
 }
 $('#brandsBtn').onclick = () => { showBrands(); $('#brandQ').innerHTML = ''; $('#brandDialog').showModal(); };
-$('#brandList').onclick = (e) => { const a = e.target.closest('[data-slug]'); if (a) askNext(a.dataset.slug); };
+$('#brandList').onclick = (e) => { const a = e.target.closest('[data-slug]'); if (a) { e.preventDefault(); askNext(a.dataset.slug); } };
 $('#brandCreate').onclick = async () => {
   const name = $('#brandName').value.trim();
   if (!name) return;
@@ -494,8 +561,4 @@ $('#brandCreate').onclick = async () => {
   askNext(r.brand.slug, r.next);
 };
 
-// ---------------------------------------------------------------- start
-loadProjects().then((list) => {
-  const want = location.hash.slice(1);
-  if (want && list.some((p) => p.id === want)) openProject(want);
-});
+route();

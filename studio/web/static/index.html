@@ -5,130 +5,112 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vibe Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/app.css?v=6">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css?v=8">
 </head>
 <body>
-<div class="shell">
-  <aside class="library" aria-label="Projects">
-    <div class="brandmark">Vibe Studio</div>
-    <button class="primary wide" id="newBtn">New video</button>
-    <nav id="projectList" class="projects"></nav>
-    <div class="aside-foot">
-      <button class="ghost" id="brandsBtn">Brand profiles</button>
-      <button class="ghost" id="themeBtn" aria-label="Switch light or dark mode">Light mode</button>
+<header class="topbar">
+  <a class="wordmark" href="/" id="homeLink">Vibe Studio</a>
+  <nav class="crumbs" id="crumbs" aria-label="Location"></nav>
+  <div class="top-actions">
+    <button class="ghost" id="brandsBtn">Brands</button>
+    <button class="ghost" id="themeBtn" aria-label="Switch light or dark mode">Dark mode</button>
+    <button class="primary" id="newBtn">New video</button>
+  </div>
+</header>
+
+<main id="home" class="page">
+  <div class="home-head">
+    <h1>Your videos</h1>
+    <p class="sub">Pick a video to keep editing, or add a new recording. Your originals are never changed.</p>
+  </div>
+  <div id="library" class="library-grid"></div>
+</main>
+
+<main id="project" class="page" hidden>
+  <section class="hero">
+    <div class="hero-text">
+      <h1 id="projName"></h1>
+      <p id="projMeta" class="sub"></p>
     </div>
-  </aside>
+    <ol class="steps" id="steps" aria-label="Progress"></ol>
+  </section>
 
-  <main id="main">
-    <section id="empty" class="empty">
-      <h1>Drop in a recording to start.</h1>
-      <p>Long videos, Tella exports, screen recordings. You review the editing plan before anything is rendered, and your original file is never changed.</p>
-      <button class="primary" id="emptyNew">New video</button>
-    </section>
-
-    <section id="workspace" hidden>
-      <header class="proj-head">
-        <div>
-          <h1 id="projName"></h1>
-          <p id="projMeta" class="meta"></p>
-        </div>
-        <div class="actions">
-          <span id="planStatus" class="status-pill"></span>
-          <a id="reviewLink" class="btn-link" href="#">Review videos</a>
-          <button id="previewBtn">Make preview</button>
-          <button id="approveBtn" class="primary">Approve plan</button>
-          <button id="renderBtn" class="primary" hidden>Render final</button>
-        </div>
-      </header>
-
-      <div class="strip-wrap">
-        <div id="strip" class="strip" role="img" aria-label="Timeline of the recording: kept sections and removed mistakes"></div>
-        <div class="strip-legend"><span class="key kept"></span>kept <span class="key cut"></span>removed <span id="stripTimes" class="meta"></span></div>
-      </div>
-
-      <div class="grid">
-        <div class="left">
-          <video id="player" controls preload="metadata"></video>
-          <div class="player-bar">
-            <label>Show
-              <select id="playerSource"></select>
-            </label>
-          </div>
-          <form id="commentForm" class="comments">
-            <label for="commentText">Comment on this moment</label>
-            <div class="row">
-              <input id="commentText" placeholder="Pause the video, then type a note" autocomplete="off">
-              <button class="primary" id="commentBtn">Add at 0:00.0</button>
-            </div>
-            <ol id="commentList" class="comment-list"></ol>
-          </form>
-          <div id="jobs" class="jobs" aria-live="polite"></div>
-          <form id="reviseForm" class="revise">
-            <label for="reviseText">Ask for a change</label>
-            <div class="row">
-              <input id="reviseText" placeholder="Make the captions smaller" autocomplete="off">
-              <button>Apply</button>
-            </div>
-            <p class="hint">Changes are applied at the current playhead time when they refer to "that zoom" or "that section".</p>
-            <p id="reviseMsg" class="meta"></p>
-          </form>
-        </div>
-
-        <div class="right">
-          <div class="tabs" role="tablist">
-            <button role="tab" data-tab="plan" aria-selected="true">Plan</button>
-            <button role="tab" data-tab="transcript">Transcript</button>
-            <button role="tab" data-tab="style">Captions &amp; graphics</button>
-            <button role="tab" data-tab="shorts">Shorts</button>
-            <button role="tab" data-tab="exports">Exports</button>
-          </div>
-          <div class="tabpanel" id="tab-plan"></div>
-          <div class="tabpanel" id="tab-transcript" hidden></div>
-          <div class="tabpanel" id="tab-style" hidden></div>
-          <div class="tabpanel" id="tab-shorts" hidden></div>
-          <div class="tabpanel" id="tab-exports" hidden></div>
+  <div class="workspace">
+    <div class="col-main">
+      <div class="player-card">
+        <div class="chips" id="sourceChips" role="tablist" aria-label="Which version to watch"></div>
+        <video id="player" controls preload="metadata" playsinline></video>
+        <div class="strip-wrap">
+          <div id="strip" class="strip" role="img" aria-label="Your recording: kept parts and removed mistakes"></div>
+          <div class="legend"><span class="key kept"></span>Kept <span class="key cut"></span>Removed <span id="stripInfo" class="muted"></span></div>
         </div>
       </div>
-    </section>
-  </main>
-</div>
+
+      <form id="askForm" class="card ask">
+        <label for="askText">Tell the editor what to change</label>
+        <div class="row">
+          <input id="askText" placeholder="e.g. make the captions smaller, remove that zoom, keep this section" autocomplete="off">
+          <button class="secondary">Apply</button>
+        </div>
+        <p class="hint">Pause the video first if your request is about "this" moment.</p>
+        <p id="askMsg" class="msg" role="status"></p>
+      </form>
+
+      <form id="noteForm" class="card ask">
+        <label for="noteText">Leave a note at <span id="noteTime">0:00.0</span></label>
+        <div class="row">
+          <input id="noteText" placeholder="Pause where you want the note, type, press Enter" autocomplete="off">
+          <button class="secondary" id="noteBtn">Add note</button>
+        </div>
+        <p id="noteMsg" class="msg" role="status"></p>
+        <ul id="noteList" class="note-list"></ul>
+      </form>
+    </div>
+
+    <aside class="col-side">
+      <div class="card next" id="nextCard"></div>
+      <div class="card jobs" id="jobs" aria-live="polite"></div>
+      <div class="card tabs-card">
+        <div class="tabs" role="tablist">
+          <button role="tab" data-tab="edit" aria-selected="true">Edit</button>
+          <button role="tab" data-tab="style">Style</button>
+          <button role="tab" data-tab="shorts">Shorts</button>
+          <button role="tab" data-tab="files">Downloads</button>
+        </div>
+        <div class="tabpanel" id="tab-edit"></div>
+        <div class="tabpanel" id="tab-style" hidden></div>
+        <div class="tabpanel" id="tab-shorts" hidden></div>
+        <div class="tabpanel" id="tab-files" hidden></div>
+      </div>
+    </aside>
+  </div>
+</main>
 
 <dialog id="newDialog">
   <form method="dialog" id="newForm">
-    <h2>New video</h2>
+    <h2>Add a recording</h2>
     <label class="drop" id="drop">
       <input type="file" id="fileInput" accept="video/*">
-      <span id="dropText">Drop a video here or click to choose one</span>
+      <span id="dropText"><b>Drop a video here</b><br>or click to choose a file</span>
     </label>
     <label>Or paste a file or folder path (a Tella export folder works)
-      <input id="pathInput" placeholder="C:\Users\you\Videos\Tella\my-recording.mp4">
+      <input id="pathInput" placeholder="C:\Users\you\Videos\recording.mp4">
     </label>
+    <fieldset class="choice" id="modeChoice">
+      <legend>What should I make?</legend>
+      <label><input type="radio" name="mode" value="repurpose" checked><span><b>Full video + Shorts</b><small>YouTube edit plus the best stand-alone clips</small></span></label>
+      <label><input type="radio" name="mode" value="longform"><span><b>Full video</b><small>One polished edit of the whole recording</small></span></label>
+      <label><input type="radio" name="mode" value="shorts"><span><b>One Short</b><small>A single vertical video</small></span></label>
+    </fieldset>
     <div class="row2">
-      <label>What should I make?
-        <select id="modeInput">
-          <option value="longform">Full edited video</option>
-          <option value="repurpose">Full video + Shorts</option>
-          <option value="shorts">One short video</option>
-        </select>
-      </label>
-      <label>Brand
-        <select id="brandInput"><option value="">No brand yet</option></select>
-      </label>
+      <label>Brand <select id="brandInput"><option value="">No brand</option></select></label>
+      <label>Shorts <select id="shortsCount"><option>3</option><option selected>5</option><option>8</option></select></label>
+      <label>Short length <select id="shortLen"><option value="15,30">15-30 s</option><option value="20,60" selected>20-60 s</option><option value="45,90">45-90 s</option></select></label>
     </div>
-    <div class="row2">
-      <label>Number of Shorts <input id="shortsCount" type="number" min="1" max="20" value="5"></label>
-      <label>Short length
-        <select id="shortLen">
-          <option value="15,30">15-30 s</option>
-          <option value="20,60" selected>20-60 s</option>
-          <option value="45,90">45-90 s</option>
-        </select>
-      </label>
-    </div>
-    <p id="newMsg" class="meta"></p>
+    <p id="newMsg" class="msg" role="status"></p>
     <div class="dialog-actions">
-      <button value="cancel" formnovalidate>Cancel</button>
+      <button value="cancel" formnovalidate class="ghost">Cancel</button>
       <button class="primary" id="createBtn" value="default">Import and plan</button>
     </div>
   </form>
@@ -136,17 +118,17 @@
 
 <dialog id="brandDialog">
   <form method="dialog" id="brandForm">
-    <h2>Brand profiles</h2>
+    <h2>Brands</h2>
     <div id="brandList"></div>
     <div id="brandQ"></div>
     <div class="row">
-      <input id="brandName" placeholder="New brand name, e.g. Booked Solid">
-      <button id="brandCreate" type="button">Create</button>
+      <input id="brandName" placeholder="New brand name">
+      <button id="brandCreate" type="button" class="secondary">Create</button>
     </div>
-    <div class="dialog-actions"><button value="close">Done</button></div>
+    <div class="dialog-actions"><button value="close" class="primary">Done</button></div>
   </form>
 </dialog>
 
-<script src="/static/app.js?v=7"></script>
+<script src="/static/app.js?v=10"></script>
 </body>
 </html>

@@ -19,7 +19,7 @@ export const LowerThird: React.FC<LowerThirdProps> = (p) => {
   const roleS = spring({frame: frame - 10, fps, config: {damping: 18, stiffness: 120}});
   const left = p.width * (vertical ? 0.07 : 0.06);
   // stays above the caption band (captions occupy ~8-14% from the bottom in 16:9, ~27-33% in 9:16)
-  const bottom = p.height * (vertical ? 0.39 : 0.19);
+  const bottom = p.height * (vertical ? 0.355 : 0.062);  // 16:9: same band as captions (captions slide right while it shows)
   const nameSize = (vertical ? 58 : 54) * u;
   return (
     <Fill>

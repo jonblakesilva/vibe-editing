@@ -1,3 +1,12 @@
+// Send browser errors to the studio log so problems in your browser are visible to Claude.
+window.addEventListener('error', (e) => {
+  fetch('/api/clientlog', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({page: location.pathname, msg: String(e.message), src: e.filename, line: e.lineno})}).catch(() => {});
+});
+window.addEventListener('unhandledrejection', (e) => {
+  fetch('/api/clientlog', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({page: location.pathname, msg: String(e.reason && e.reason.message || e.reason)})}).catch(() => {});
+});
 // Vibe Studio review screen: Frame.io-style review of rendered videos.
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
@@ -18,13 +27,14 @@ const vA = $('#vA'), vB = $('#vB'), canvas = $('#draw'), ctx = canvas.getContext
 // ------------------------------------------------------------ author identity (local)
 let author = '';
 try { author = localStorage.getItem('vs-author') || ''; } catch {}
-const setWho = () => { $('#who').innerHTML = `Commenting as <a href="#" id="renameMe" class="tlink">${esc(author || 'you')}</a>`; };
-document.addEventListener('click', (e) => {
-  if (e.target.id !== 'renameMe') return;
-  e.preventDefault();
-  const n = prompt('Your name for comments:', author);
-  if (n && n.trim()) { author = n.trim(); try { localStorage.setItem('vs-author', author); } catch {} setWho(); }
-});
+// Inline name field (no pop-ups: browsers inside VS Code block prompt/confirm dialogs)
+const setWho = () => {
+  $('#who').innerHTML = `<label class="rv-name">Your name <input id="authorInput" value="${esc(author)}" placeholder="e.g. Jonathan" maxlength="40"></label>`;
+  $('#authorInput').addEventListener('input', (e) => {
+    author = e.target.value.trim();
+    try { localStorage.setItem('vs-author', author); } catch {}
+  });
+};
 setWho();
 const COLORS = ['#e8a33d', '#4f8cf7', '#6fbf8e', '#c2564b', '#a774e8', '#3fb6c4', '#e86fb0'];
 const colorFor = (name) => COLORS[[...String(name)].reduce((a, c) => a + c.charCodeAt(0), 0) % COLORS.length];
@@ -259,7 +269,11 @@ $('#cList').onclick = async (e) => {
     S.replyTo = null; await loadComments(); return;
   }
   if (t.dataset.del) {
-    if (!confirm('Delete this comment and its replies?')) return;
+    if (t.dataset.armed !== '1') {  // two-step delete instead of a confirm() pop-up
+      t.dataset.armed = '1'; t.textContent = 'Click again to delete';
+      setTimeout(() => { t.dataset.armed = ''; t.textContent = 'Delete'; }, 3000);
+      return;
+    }
     await api(`${base}/${t.dataset.del}`, {method: 'POST', body: {action: 'delete'}}); await loadComments(); return;
   }
   if (t.dataset.done !== undefined && t.matches('input')) {
@@ -285,12 +299,7 @@ $('#composer').onsubmit = async (e) => {
   e.preventDefault();
   const text = $('#cText').value.trim();
   if (!text) { say('Type your comment first, then press Comment.'); $('#cText').focus(); return; }
-  if (!author) {
-    const n = prompt('Your name for comments:', '');
-    author = (n && n.trim()) || 'you';
-    try { localStorage.setItem('vs-author', author); } catch {}
-    setWho();
-  }
+  if (!author) author = 'you';
   const at = S.inPt ?? vA.currentTime;
   const end = S.outPt != null && S.outPt > at ? S.outPt : null;
   try {

@@ -99,6 +99,16 @@ replies in the thread when it needs a decision, marks the rest Done, and renders
 Projects, brands and renders are stored in `%USERPROFILE%\VibeStudio` (override with
 `VIBE_STUDIO_HOME`), never inside the repository.
 
+## Music and sound effects
+
+Licensed tracks live in `%USERPROFILE%\VibeStudio\music` and effects in `...\sfx`, each with a
+`manifest.json` (source, license, loudness) and `LICENSES.md`. The current library is from Mixkit (free
+for monetized YouTube and social video, no credit required; not for broadcast/TV-radio music use or
+Content ID registration). Music is loudness-matched to sit ~14-16 dB under your voice, ducks further
+while you talk, and fades in and out. Sound effects are short and subtle (click, tick, pop, soft impact,
+chime) and only play when a graphic appears; turn them off in the Style tab. Files that need a credit
+line are never used automatically.
+
 ## Formats
 
 - **In:** MP4, MOV, MKV, WebM, M4V, AVI (any FFmpeg-readable video; variable frame rate is

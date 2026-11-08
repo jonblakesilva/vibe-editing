@@ -17,6 +17,27 @@ from .. import project as proj_mod
 from ..jobs import JobManager
 
 app = FastAPI(title="Vibe Studio")
+
+
+def _log(name: str, line: str) -> None:
+    d = config.DATA_HOME / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / name, "a", encoding="utf-8") as f:
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
+
+
+@app.middleware("http")
+async def request_log(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/") and request.method != "GET" or response.status_code >= 400:
+        _log("server.log", f"{request.method} {request.url.path} -> {response.status_code}")
+    return response
+
+
+@app.post("/api/clientlog")
+def client_log(body: dict = Body(...)):
+    _log("client.log", config.redact(json.dumps(body)[:2000]))
+    return {"ok": True}
 STATIC = Path(__file__).parent / "static"
 jobs: JobManager | None = None
 
@@ -101,6 +122,38 @@ def get_project(pid: str):
     return {"project": proj, "plan": plan, "segments": segments,
             "plan_md": (p["dir"] / "plan.md").read_text(encoding="utf-8") if (p["dir"] / "plan.md").exists() else None,
             "exports": exports}
+
+
+@app.get("/api/projects/{pid}/thumb.jpg")
+def thumb(pid: str):
+    """Small poster frame for the library (from the latest export, else the original)."""
+    import subprocess
+    p = pipeline.paths(pid)
+    out = p["work"] / "thumb.jpg"
+    exports = sorted(p["exports"].glob("*youtube*.mp4")) or sorted(p["exports"].glob("*.mp4"))
+    src = exports[0] if exports else (p["work"] / "browser_proxy.mp4" if (p["work"] / "browser_proxy.mp4").exists()
+                                      else Path(proj_mod.load(pid)["source"]["path"]))
+    if not out.exists() or out.stat().st_mtime < src.stat().st_mtime:
+        from .. import media
+        dur = media.probe(src).duration
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{dur * 0.3:.2f}", "-i", str(src), "-frames:v", "1",
+                        "-vf", "scale=640:-2", "-q:v", "4", str(out)], capture_output=True)
+    if not out.exists():
+        raise HTTPException(404)
+    return FileResponse(out, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/music")
+def music_library():
+    """Licensed tracks and sound effects available to use (with their license info)."""
+    out = {}
+    for kind, d in (("music", config.MUSIC_DIR), ("sfx", config.DATA_HOME / "sfx")):
+        man = d / "manifest.json"
+        items = json.loads(man.read_text(encoding="utf-8")) if man.exists() else []
+        for it in items:
+            it["path"] = str(d / it.get("file", ""))
+        out[kind] = [it for it in items if Path(it["path"]).exists()]
+    return out
 
 
 @app.get("/api/projects/{pid}/transcript")

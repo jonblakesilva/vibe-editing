@@ -112,7 +112,8 @@ def caption_band(width: int, height: int, style: dict) -> dict:
     return {"cy": cy, "size": size, "top": cy - size * 0.62 - pad_y, "bottom": cy + size * 0.62 + pad_y}
 
 
-def build_premium(words: list[dict], style: dict, *, width: int, height: int, offset: float = 0.0) -> str:
+def build_premium(words: list[dict], style: dict, *, width: int, height: int, offset: float = 0.0,
+                  avoid_windows: list[dict] | None = None) -> str:
     """Premium captions: one line per phrase on a rounded brand-color panel sized to the
     text, the spoken word lit in the brand highlight color, soft fade. No heavy outlines."""
     from . import fontmetrics
@@ -179,6 +180,12 @@ def build_premium(words: list[dict], style: dict, *, width: int, height: int, of
             end = min(end, nxt - 0.01)
         tw = fontmetrics.text_width(" ".join(texts), font, size, spacing)
         cx = width / 2
+        for win in avoid_windows or []:  # e.g. a lower third at bottom-left
+            if start < win["end"] + 0.4 and end > win["start"] and height < width:
+                left = win["x_right"] * width + width * 0.035
+                right = width * 0.88  # keep clear of the corner logo
+                cx = max(cx, left + tw / 2 + pad_x)
+                cx = min(cx, right - tw / 2 - pad_x)
         x0, x1 = cx - tw / 2 - pad_x, cx + tw / 2 + pad_x
         y0, y1 = cy - size * 0.62 - pad_y, cy + size * 0.62 + pad_y
         box_tags = r"{\fad(90,70)\pos(0,0)\p1}"
@@ -197,9 +204,9 @@ def build_premium(words: list[dict], style: dict, *, width: int, height: int, of
 
 
 def build_ass(words: list[dict], style: dict, *, width: int, height: int, avoid: list[dict] | None = None,
-              offset: float = 0.0) -> str:
+              offset: float = 0.0, avoid_windows: list[dict] | None = None) -> str:
     if style.get("box") == "rounded":
-        return build_premium(words, style, width=width, height=height, offset=offset)
+        return build_premium(words, style, width=width, height=height, offset=offset, avoid_windows=avoid_windows)
     base = height if height < width else width  # scale font with the short side
     scale = base / 1080 * float(style.get("size_scale", 1.0))
     size = int(style.get("size", 64) * scale)
@@ -335,9 +342,9 @@ def _parse_ass_time(s: str) -> float:
 
 
 def write_all(words: list[dict], style: dict, out_dir: Path, stem: str, *, width: int, height: int,
-              avoid: list[dict] | None = None) -> dict:
+              avoid: list[dict] | None = None, avoid_windows: list[dict] | None = None) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
-    ass = build_ass(words, style, width=width, height=height, avoid=avoid)
+    ass = build_ass(words, style, width=width, height=height, avoid=avoid, avoid_windows=avoid_windows)
     paths = {"ass": out_dir / f"{stem}.ass", "srt": out_dir / f"{stem}.srt", "vtt": out_dir / f"{stem}.vtt"}
     paths["ass"].write_text(ass, encoding="utf-8")
     paths["srt"].write_text(to_srt(words), encoding="utf-8")

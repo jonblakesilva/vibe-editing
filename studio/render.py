@@ -140,6 +140,34 @@ ZONES = {
 }
 
 
+# Subtle, premium sound for each graphic (no long whooshes or risers).
+SFX_FOR = {"LowerThird": "click", "EditorialTitle": "impact", "KineticTitle": "impact", "StatPanels": "tick",
+           "FloatingCards": "pop", "Callout": "pop", "CallToAction": "pop", "ChapterCard": "swipe", "EndCard": "success"}
+
+
+def _library(kind: str) -> list[dict]:
+    d = config.MUSIC_DIR if kind == "music" else config.DATA_HOME / "sfx"
+    man = d / "manifest.json"
+    if not man.exists():
+        return []
+    items = json.loads(man.read_text(encoding="utf-8"))
+    for it in items:
+        it["path"] = str(d / it["file"])
+    return [it for it in items if Path(it["path"]).exists() and not it.get("attribution_required")]
+
+
+def _library_lufs(path: str) -> float | None:
+    name = Path(path).name
+    return next((it.get("lufs") for it in _library("music") if Path(it["path"]).name == name), None)
+
+
+def _sfx_for(template: str) -> dict | None:
+    cat = SFX_FOR.get(template)
+    if not cat:
+        return None
+    return next((it for it in _library("sfx") if it.get("category") == cat), None)
+
+
 def zoom_filter(z_expr: str, fx: float, fy: float, fps: float) -> str:
     """Sub-pixel smooth zoom: the perspective filter samples a shrinking window with bicubic
     interpolation every frame, so slow pushes glide instead of stepping whole pixels
@@ -169,6 +197,7 @@ def graphics_for_output(plan: dict, tl: Timeline, out_spec: dict, motion_dir: Pa
         path = motion.render_overlay(g, plan, out_spec, motion_dir)
         if path:
             items.append({"path": path, "start": start, "duration": g["duration"], "id": g["id"], "template": g["template"],
+                          "props": g.get("props", {}),
                           "placement": g.get("placement", "overlay")})
     # Cuts can push graphics on top of each other. Graphics that share screen space are
     # staggered so each reads on its own; graphics in different zones may overlap in time.
@@ -319,10 +348,14 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
             inputs += ["-loop", "1", "-i", logo]
             lw = int(W * (0.13 if H > W else 0.075)) // 2 * 2
             op = float(bug.get("opacity", 0.85))
-            mx, my = int(W * 0.035), int(H * (0.05 if H > W else 0.045))
-            x = f"W-w-{mx}" if bug.get("position", "top-right").endswith("right") else str(mx)
+            mx = int(W * 0.03)
+            pos = bug.get("position", "bottom-right")
+            if H > W and pos.startswith("bottom"):
+                pos = "top-right"  # TikTok/Reels/Shorts buttons cover the bottom-right on phones
+            x = f"W-w-{mx}" if pos.endswith("right") else str(mx)
+            y = f"H-h-{int(H * 0.035)}" if pos.startswith("bottom") else str(int(H * (0.05 if H > W else 0.045)))
             filters.append(f"[{idx}:v]scale={lw}:-1,format=rgba,colorchannelmixer=aa={op}[logo{idx}]")
-            filters.append(f"{v}[logo{idx}]overlay=x={x}:y={my}:shortest=1:format=auto[vl{idx}]")
+            filters.append(f"{v}[logo{idx}]overlay=x={x}:y={y}:shortest=1:format=auto[vl{idx}]")
             v = f"[vl{idx}]"
             idx += 1
     # 5) captions
@@ -337,7 +370,15 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
         if face_sum and out_aspect < src_aspect:
             # after a speaker-centered crop the face sits horizontally centered
             avoid = [{"x": 0.3, "y": face_sum["box"]["y"], "w": 0.4, "h": face_sum["box"]["h"]}]
-        cap_info = cap_mod.write_all(words, style, out_path.parent, stem, width=W, height=H, avoid=avoid)
+        # lower thirds share the caption band in 16:9: captions slide right while one is on screen
+        windows = []
+        for g in graphics or []:
+            if g.get("template") == "LowerThird":
+                pr = g.get("props", {})
+                est = 0.06 + 0.012 + 1.12 * max(len(pr.get("name", "")) * 0.0145, len(pr.get("title", "")) * 0.0095) + 0.035
+                windows.append({"start": g["start"], "end": g["start"] + g["duration"], "x_right": min(0.45, est)})
+        cap_info = cap_mod.write_all(words, style, out_path.parent, stem, width=W, height=H, avoid=avoid,
+                                     avoid_windows=windows)
         if do_caps:
             ass_local = work / f"{stem}.ass"
             ass_local.write_text(Path(cap_info["ass"]).read_text(encoding="utf-8"), encoding="utf-8")
@@ -347,17 +388,43 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
     filters.append(f"{v}format=yuv420p[vout]")
     # audio
     achain = audio_chain(plan.get("audio", {}), cut)
-    music = (plan.get("audio") or {}).get("music")
+    audio = plan.get("audio") or {}
+    target = float(audio.get("target_lufs", -14))
+    music = audio.get("music")
+    mix = []
     if music and Path(music.get("path", "")).exists():
+        # loudness-matched bed: `bed_db` below the voice (default 14 dB), ducked further while you talk
+        lufs = music.get("lufs") or _library_lufs(music["path"]) or -12.0
+        gain = target + float(music.get("bed_db", -14)) - float(lufs)
         inputs += ["-stream_loop", "-1", "-i", music["path"]]
-        vol = float(music.get("volume_db", -22))
         filters.append(f"[0:a]{achain},asplit=2[voice][sc]")
-        filters.append(f"[{idx}:a]aresample=48000,volume={vol}dB,atrim=0:{info.duration:.3f}[mus]")
-        filters.append("[mus][sc]sidechaincompress=threshold=0.04:ratio=8:attack=25:release=450[duck]")
-        filters.append("[voice][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[aout]")
+        fade_out = max(0.0, info.duration - 2.5)
+        filters.append(f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,volume={gain:.2f}dB,atrim=0:{info.duration:.3f},"
+                       f"afade=t=in:d=1.2,afade=t=out:st={fade_out:.2f}:d=2.5[mus]")
+        filters.append("[mus][sc]sidechaincompress=threshold=0.03:ratio=6:attack=30:release=500[duck]")
+        mix += ["[voice]", "[duck]"]
         idx += 1
     else:
-        filters.append(f"[0:a]{achain}[aout]")
+        filters.append(f"[0:a]{achain}[voice]")
+        mix.append("[voice]")
+    sfx_cfg = audio.get("sfx") or {}
+    if sfx_cfg.get("enabled"):
+        level = float(sfx_cfg.get("level_db", -18))  # relative to the voice
+        for n, g in enumerate(graphics or []):
+            hit = _sfx_for(g.get("template", ""))
+            if not hit:
+                continue
+            inputs += ["-i", hit["path"]]
+            gain = target + level - float(hit.get("lufs") or -14)
+            ms = int(max(0.0, g["start"]) * 1000)
+            filters.append(f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,volume={gain:.2f}dB,"
+                           f"atrim=0:1.6,adelay={ms}|{ms}[sfx{n}]")
+            mix.append(f"[sfx{n}]")
+            idx += 1
+    if len(mix) == 1:
+        filters.append(f"{mix[0]}alimiter=limit=0.95[aout]")
+    else:
+        filters.append(f"{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0,alimiter=limit=0.95[aout]")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_name(out_path.stem + ".part.mp4")
     script = work / f"{stem}.filter.txt"

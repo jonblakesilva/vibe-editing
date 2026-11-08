@@ -43,8 +43,9 @@ def get_transcript(pid: str, *, engine: str = "local", model: str | None = None,
     corr = p["work"] / "corrections.json"
     if corr.exists():
         transcribe.apply_corrections(t, json.loads(corr.read_text(encoding="utf-8")))
-    proj["status"] = "transcribed"
-    proj_mod.save(proj)
+    if proj.get("status") == "imported":  # never move a project backwards
+        proj["status"] = "transcribed"
+        proj_mod.save(proj)
     return t
 
 
@@ -115,7 +116,9 @@ def make_plan(pid: str, *, mode: str | None = None, outputs: list[str] | None = 
         plan["outputs"] = [dict(plan_mod.PLATFORM_OUTPUTS[o], name=o) for o in (outputs or ["shorts"])]
     plan["repurpose"] = repurpose.generate(plan, t, br)
     plan_mod.save(plan, paths(pid)["plan"])
-    proj["status"] = "planned"
+    proj = proj_mod.load(pid)
+    if proj.get("status") in ("imported", "transcribed"):
+        proj["status"] = "planned"
     proj_mod.save(proj)
     return plan
 

@@ -75,6 +75,14 @@ def topic_keywords(words: list[dict], n: int = 6) -> list[str]:
     return out[:n]
 
 
+def _brand_music(brand: dict) -> dict | None:
+    m = brand.get("music") or {}
+    track = m.get("default_track")
+    if m.get("enabled") and track and Path(track).exists():
+        return {"path": track, "bed_db": float(m.get("bed_db", -16))}
+    return None
+
+
 def default_zooms(analysis: dict, vtype: str, mode: str) -> list[dict]:
     if vtype == "tutorial" and mode == "longform":
         return []  # keep screen content readable; add zooms by revision
@@ -185,8 +193,9 @@ def build(project: dict, transcript: dict, *, brand: dict, mode: str = "longform
         "broll": [],
         "reframe": {"mode": "auto"},
         "logo_bug": dict(brand.get("recurring", {}).get("logo_bug") or {"enabled": False}),  # auto | largest | split | center (vertical/square crops)
-        "audio": {"clean": True, "denoise": "light", "normalize": True,
-                  "target_lufs": -14.0 if mode == "longform" else -14.0, "music": None},
+        "audio": {"clean": True, "denoise": "light", "normalize": True, "target_lufs": -14.0,
+                  "music": _brand_music(brand),
+                  "sfx": {"enabled": bool(brand.get("recurring", {}).get("sound_effects")), "level_db": -18}},
         "outputs": [dict(PLATFORM_OUTPUTS[o], name=o) for o in (outputs or (
             ["youtube"] if mode == "longform" else ["shorts"]))],
         "sentences": analysis["sentences"],
@@ -348,6 +357,7 @@ def revise(plan: dict, ops: list[dict], request: str = "") -> dict:
       {"op":"add_graphic","template":"KineticTitle","start":2.0,"duration":3,"props":{...},"placement":"behind"}
       {"op":"add_zoom","start":5,"end":8,"scale":1.15}
       {"op":"remove","id":"g_cta1"}
+      {"op":"props","id":"g_user4","value":{"layout":"sides"}}   merge graphic props by id
       {"op":"note","text":"..."}"""
     plan = copy.deepcopy(plan)
     applied = []
@@ -378,6 +388,11 @@ def revise(plan: dict, ops: list[dict], request: str = "") -> dict:
             plan["zooms"].append({"id": f"z{n}u", "start": float(op["start"]), "end": float(op["end"]),
                                   "scale": float(op.get("scale", 1.15)), "kind": op.get("kind", "punch"),
                                   "enabled": True, "reason": "Requested"})
+        elif kind == "props":  # merge props into one item by id (safe even after removals)
+            hit = find_item(plan, op["id"])
+            if not hit:
+                raise KeyError(f"No plan item with id {op['id']}")
+            hit[1].setdefault("props", {}).update(op["value"])
         elif kind == "remove":
             hit = find_item(plan, op["id"])
             if hit:
@@ -393,6 +408,14 @@ def revise(plan: dict, ops: list[dict], request: str = "") -> dict:
     plan["revisions"].append({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "request": request, "ops": applied})
     plan["stats"] = stats(plan)
     return plan
+
+
+def _brand_colors(plan: dict) -> dict:
+    from . import brand as brand_mod
+    try:
+        return brand_mod.load(plan.get("brand") if plan.get("brand") not in (None, "default") else None)["colors"]
+    except FileNotFoundError:
+        return {}
 
 
 def _next_num(items: list[dict], prefix: str) -> int:
@@ -420,8 +443,15 @@ def parse_request(plan: dict, text: str, at: float | None = None) -> list[dict]:
             t = t + f" {style} caption"
     for style in CAPTION_STYLES:
         if f"{style.replace('_', ' ')} caption" in t or f"{style} caption" in t or f"captions {style}" in t:
-            ops += [{"op": "set", "path": f"captions.{k}", "value": v}
-                    for k, v in CAPTION_STYLES[style].items() if k != "highlight"]
+            colors = _brand_colors(plan)
+            for k, v in CAPTION_STYLES[style].items():
+                if k == "highlight":
+                    continue
+                if v == "brand":  # e.g. the premium panel takes the brand navy
+                    v = colors.get("navy") or colors.get("background") or "#0F1E4A"
+                ops.append({"op": "set", "path": f"captions.{k}", "value": v})
+            if CAPTION_STYLES[style].get("highlight") == "brand" and not plan["captions"].get("highlight"):
+                ops.append({"op": "set", "path": "captions.highlight", "value": colors.get("highlight", "#F97316")})
             ops.append({"op": "set", "path": "captions.style", "value": style})
     if "caption" in t and ("top" in t or "higher" in t):
         ops.append({"op": "set", "path": "captions.position", "value": "top"})

@@ -19,7 +19,10 @@ export const FloatingCards: React.FC<FloatingCardsProps> = (p) => {
   const cards = (p.cards && p.cards.length ? p.cards : [{title: 'Card'}]).slice(0, p.layout === 'sides' ? 4 : 7);
   const n = cards.length;
   const sidesMode = p.layout === 'sides' && !vertical;
-  const cw = (vertical ? 250 : sidesMode ? 205 : 230) * u, ch = cw * (sidesMode ? 1.18 : 1.42);
+  // screenshots are wide: image cards get a landscape shape with a title bar
+  const imageCards = (p.cards || []).length > 0 && (p.cards || []).every((c) => c.image);
+  const cw = (imageCards ? (vertical ? 300 : sidesMode ? 330 : 300) : vertical ? 250 : sidesMode ? 205 : 230) * u;
+  const ch = imageCards ? cw * 0.62 : cw * (sidesMode ? 1.18 : 1.42);
   const spread = vertical ? p.width * 0.8 : Math.min(p.width * 0.62, n * cw * 0.78);
   const out = interpolate(frame, [durationInFrames - fps * 0.4, durationInFrames], [0, 1], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.in(Easing.cubic)});
@@ -45,7 +48,14 @@ export const FloatingCards: React.FC<FloatingCardsProps> = (p) => {
             boxShadow: `0 ${18 * u}px ${40 * u}px rgba(0,0,0,0.35)`, border: `${2 * u}px solid rgba(255,255,255,0.18)`,
             background: c.image ? '#000' : `linear-gradient(160deg, ${bg}, ${withAlpha(bg, 0.78)})`}}>
             {c.image ? (
-              <Img src={staticFile(c.image)} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
+              <>
+                <Img src={staticFile(c.image)} style={{width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top'}} />
+                {c.title ? (
+                  <div style={{position: 'absolute', left: 0, right: 0, bottom: 0, padding: `${10 * u}px ${14 * u}px`,
+                    background: `linear-gradient(0deg, ${withAlpha(p.colors.background || '#0F1E4A', 0.95)}, ${withAlpha(p.colors.background || '#0F1E4A', 0.75)})`,
+                    color: '#fff', fontFamily: titleFamily, fontWeight: 800, fontSize: 21 * u}}>{c.title}</div>
+                ) : null}
+              </>
             ) : (
               <div style={{position: 'absolute', inset: 0, padding: 20 * u, display: 'flex', flexDirection: 'column',
                 justifyContent: 'flex-end', color: readableOn(bg), fontFamily: titleFamily}}>

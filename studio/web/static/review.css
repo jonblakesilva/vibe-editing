@@ -102,3 +102,5 @@ button[aria-pressed="true"] { border-color: var(--amber); color: var(--amber); }
 #assetSel { min-width: 0; max-width: 46vw; font-weight: 600; }
 .rv-msg { margin: 0; font-size: 0.85rem; color: var(--amber); min-height: 1.1em; }
 .rv-msg.ok { color: var(--ok); }
+.rv-name { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--muted); }
+.rv-name input { width: 9.5rem; padding: 0.3rem 0.5rem; }
