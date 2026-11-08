@@ -134,6 +134,7 @@ def render_main(pid: str, *, quality: str = "preview", progress=_noop,
                              faces=faces, progress=progress, cancel=cancel)
         rep = render.verify(out_path, expect_w=info["width"], expect_h=info["height"], expect_dur=tl.duration)
         rep["captions"] = info["captions"]
+        rep["notes"] = info.get("notes", [])
         results.append(rep)
     if plan["mode"] == "longform" or plan["mode"] == "repurpose":
         _write_extras(p["exports"], plan, tl)

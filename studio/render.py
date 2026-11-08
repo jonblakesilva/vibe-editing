@@ -205,8 +205,11 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
         filters.append(f"{v}[b{idx}]overlay=enable='between(t,{st:.3f},{st + d:.3f})':eof_action=pass[vb{idx}]")
         v = f"[vb{idx}]"
         idx += 1
-    # 4) motion graphics overlays (transparent renders)
-    for g in graphics or []:
+    # 4) motion graphics overlays (transparent renders). "behind" graphics are composited
+    #    after this pass, between the background and the speaker (see mask.py).
+    from . import mask as mask_mod
+    behind = [g for g in graphics or [] if g.get("placement") == "behind" and mask_mod.available()]
+    for g in [g for g in graphics or [] if g not in behind]:
         inputs += ["-i", str(g["path"])]
         st = g["start"]
         filters.append(f"[{idx}:v]setpts=PTS-STARTPTS+{st:.3f}/TB,scale={W}:{H}[g{idx}]")
@@ -254,7 +257,16 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
     media.run_ffmpeg(args, duration=info.duration, cancel=cancel, env=media.fontconfig_env(),
                      on_progress=(lambda p: progress("finish", p)) if progress else None)
     tmp.replace(out_path)
-    return {"captions": cap_info, "width": W, "height": H}
+    notes = []
+    if behind:
+        if progress:
+            progress("subject mask", 0.0)
+        mask_mod.composite_behind(out_path, behind, work, fps=fps, cancel=cancel, notes=notes)
+        if progress:
+            progress("subject mask", 1.0)
+    elif any(g.get("placement") == "behind" for g in graphics or []):
+        notes.append("Subject masking unavailable (mediapipe not installed): 'behind' graphics were placed in front.")
+    return {"captions": cap_info, "width": W, "height": H, "notes": notes, "behind": len(behind)}
 
 
 # ---------------------------------------------------------------- stage 3

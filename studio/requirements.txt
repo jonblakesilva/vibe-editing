@@ -11,3 +11,6 @@ fastapi>=0.110              # local dashboard
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9     # dashboard uploads
 pytest>=8                   # test suite
+
+# Optional: 'title behind me' subject masking (Apache-2.0). Model downloads from Google on first use.
+mediapipe>=0.10

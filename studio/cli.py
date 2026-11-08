@@ -84,6 +84,33 @@ def cmd_download(a):
     return 0
 
 
+def cmd_fetch(a):
+    """Download a direct file link (e.g. a Tella export downloadUrl) in chunks, then import it."""
+    import requests
+    from urllib.parse import urlparse
+    if urlparse(a.url).scheme != "https":
+        print("Only https download links are accepted.")
+        return 1
+    out = config.DATA_HOME / "tella"
+    out.mkdir(parents=True, exist_ok=True)
+    name = (a.name or Path(urlparse(a.url).path).stem or "recording").replace("/", "_")[:80]
+    dst = out / f"{time.strftime('%Y%m%d-%H%M%S')}_{name}.mp4"
+    with requests.get(a.url, stream=True, timeout=60) as r:
+        r.raise_for_status()
+        total = int(r.headers.get("content-length") or 0)
+        done = 0
+        cb = _progress_printer()
+        with open(dst, "wb") as f:
+            for chunk in r.iter_content(4 * 1024 * 1024):
+                f.write(chunk)
+                done += len(chunk)
+                if total:
+                    cb("download", done / total)
+    print(f"Saved {dst} ({dst.stat().st_size / 1e6:.1f} MB)")
+    a.source, a.copy = str(dst), False
+    return cmd_import(a)
+
+
 def cmd_projects(a):
     for p in proj_mod.list_projects():
         print(f"{p['id']:<48} {p['status']:<12} {p['source']['duration'] / 60:6.1f} min  brand={p.get('brand') or '-'}")
@@ -185,6 +212,8 @@ def _render(a, quality):
         bad = [k for k, v in r["checks"].items() if not v]
         print(f"{'PASS' if r['ok'] else 'FAIL'}  {r['path']}  {r['width']}x{r['height']}  "
               f"{r['video_duration']:.1f}s  {r['size_mb']} MB" + (f"  failed: {bad}" if bad else ""))
+        for n in r.get("notes", []):
+            print(f"      note: {n}")
     return 0 if ok else 1
 
 
@@ -287,6 +316,14 @@ def main(argv=None):
         s.add_argument("--copy", action="store_true", help="copy the original into the project folder")
         s.add_argument("--camera", help="separate camera recording (optional)")
         s.set_defaults(fn=fn)
+
+    s = sub.add_parser("fetch", help="download a direct link (e.g. Tella export URL) and import it")
+    s.add_argument("url")
+    s.add_argument("--name")
+    s.add_argument("--brand")
+    s.add_argument("--mode", default="longform", choices=["longform", "shorts", "repurpose"])
+    s.add_argument("--camera", help="separate camera recording (optional)")
+    s.set_defaults(fn=cmd_fetch)
 
     sub.add_parser("projects").set_defaults(fn=cmd_projects)
 

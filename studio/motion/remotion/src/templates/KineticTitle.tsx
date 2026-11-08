@@ -23,6 +23,8 @@ export const KineticTitle: React.FC<KineticTitleProps> = (p) => {
   const words = (p.text || 'TITLE').split(/\s+/);
   const vertical = p.height > p.width;
   const maxW = p.width * (vertical ? 0.86 : 0.84);
+  // Behind a vertical speaker the head fills the middle, so sit the title in the headroom.
+  const anchorY = p.y ?? (vertical ? (p.placement === 'behind' ? 0.15 : 0.3) : 0.42);
   const longest = Math.max(...words.map((w) => w.length));
   const charsPerLine = vertical ? Math.max(8, longest) : Math.max(14, Math.ceil(p.text.length / 2));
   const fontSize = Math.min((maxW / (charsPerLine * 0.62)), (vertical ? 210 : 190) * u);
@@ -49,7 +51,7 @@ export const KineticTitle: React.FC<KineticTitleProps> = (p) => {
           position: 'absolute',
           left: 0,
           right: 0,
-          top: `${(p.y ?? (vertical ? 0.3 : 0.42)) * 100}%`,
+          top: `${anchorY * 100}%`,
           transform: `translateY(-50%) scale(${lineScale}) rotateX(${tilt}deg)`,
           transformOrigin: '50% 60%',
           opacity: 1 - exit,
@@ -95,7 +97,7 @@ export const KineticTitle: React.FC<KineticTitleProps> = (p) => {
             position: 'absolute',
             left: 0,
             right: 0,
-            top: `calc(${(p.y ?? (vertical ? 0.3 : 0.42)) * 100}% + ${fontSize * 0.9}px)`,
+            top: `calc(${anchorY * 100}% + ${fontSize * 0.9}px)`,
             textAlign: 'center',
             fontFamily: titleFamily,
             fontWeight: 600,
