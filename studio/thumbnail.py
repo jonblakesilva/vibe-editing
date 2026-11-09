@@ -152,13 +152,14 @@ def screen_card(plan: dict, out: Path) -> Path | None:
 
 
 def make(pid: str, *, title: str | None = None, highlight: str | None = None, times: list[float] | None = None,
-         count: int = 3, photos: list[str] | None = None) -> list[Path]:
+         count: int = 3, photos: list[str] | None = None, out_dir: Path | None = None,
+         name: str = "thumbnail") -> list[Path]:
     """photos: posed thumbnail photos to use instead of video frames (best results)."""
     proj = proj_mod.load(pid)
     d = proj_mod.project_dir(proj["id"])
     plan = plan_mod.load(d / "plan.json")
     title = (title or plan["summary"].get("topic") or proj["name"]).strip()
-    out_dir = d / "exports" / "thumbnails"
+    out_dir = Path(out_dir) if out_dir else d / "exports" / "thumbnails"
     work = d / "work" / "thumbs"
     out_dir.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
@@ -190,7 +191,7 @@ def make(pid: str, *, title: str | None = None, highlight: str | None = None, ti
                            cwd=motion.REMOTION_DIR, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if r.returncode != 0 or not png.exists():
             raise RuntimeError(f"Thumbnail render failed:\n{r.stderr[-1200:]}")
-        jpg = out_dir / f"thumbnail_{k}.jpg"
+        jpg = out_dir / f"{name}_{k}.jpg"
         Image.open(png).convert("RGB").save(jpg, quality=92)  # YouTube limit is 2 MB; this lands well under
         results.append(jpg)
     return results
