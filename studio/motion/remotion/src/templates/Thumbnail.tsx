@@ -22,13 +22,11 @@ export const Thumbnail: React.FC<ThumbnailProps> = (p) => {
   const navy = p.colors.background;
   return (
     <AbsoluteFill style={{background: navy, overflow: 'hidden'}}>
-      {p.background ? (
-        <Img src={staticFile(p.background)} style={{position: 'absolute', inset: -40, width: 'calc(100% + 80px)',
-          height: 'calc(100% + 80px)', objectFit: 'cover', filter: 'blur(18px) saturate(0.8) brightness(0.55)'}} />
-      ) : null}
-      <AbsoluteFill style={{background: `linear-gradient(90deg, ${withAlpha(navy, 0.97)} 0%, ${withAlpha(navy, 0.9)} 42%, ${withAlpha(navy, 0.25)} 75%, ${withAlpha(navy, 0.1)} 100%)`}} />
-      <div style={{position: 'absolute', right: -30, bottom: -120, width: 760, height: 760, borderRadius: '50%',
-        background: `radial-gradient(circle, ${withAlpha(p.colors.primary, 0.55)} 0%, ${withAlpha(p.colors.primary, 0)} 65%)`}} />
+      {/* clean branded background: navy with a soft brand-blue glow behind the speaker and a faint grid */}
+      <AbsoluteFill style={{background: `radial-gradient(ellipse 70% 90% at 78% 60%, ${withAlpha(p.colors.primary, 0.55)} 0%, ${withAlpha(p.colors.primary, 0.12)} 45%, ${withAlpha(navy, 0)} 70%), linear-gradient(120deg, ${navy} 0%, ${withAlpha(navy, 0.92)} 100%)`}} />
+      <AbsoluteFill style={{backgroundImage: 'linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)', backgroundSize: '64px 64px'}} />
+      <div style={{position: 'absolute', right: 70, bottom: -140, width: 620, height: 620, borderRadius: '50%',
+        background: `radial-gradient(circle, ${withAlpha(p.colors.highlight, 0.35)} 0%, ${withAlpha(p.colors.highlight, 0)} 62%)`}} />
       {p.card ? (
         <div style={{position: 'absolute', right: 250, top: 70, width: 560, height: 315, borderRadius: 18, overflow: 'hidden',
           transform: 'rotate(-6deg)', border: '4px solid rgba(255,255,255,0.9)',

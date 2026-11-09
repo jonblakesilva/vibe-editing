@@ -74,8 +74,8 @@ def cutout(img: np.ndarray, out: Path) -> Path:
     """Person cut-out as a transparent PNG (plain frame if segmentation is unavailable)."""
     from PIL import Image
     from . import mask as mask_mod
-    alpha = None
-    if mask_mod.available():
+    alpha = _rembg_alpha(img)
+    if alpha is None and mask_mod.available():
         try:
             import mediapipe as mp
             from mediapipe.tasks.python import BaseOptions, vision
@@ -118,6 +118,26 @@ def cutout(img: np.ndarray, out: Path) -> Path:
     return out
 
 
+def _rembg_alpha(img: np.ndarray) -> np.ndarray | None:
+    """Crisp, hair-level person matte with BiRefNet-portrait via rembg (MIT; model ~1 GB,
+    downloaded once to ~/VibeStudio/models/rembg). None if rembg isn't installed."""
+    try:
+        import os
+        from . import config
+        os.environ.setdefault("U2NET_HOME", str(config.DATA_HOME / "models" / "rembg"))
+        from PIL import Image
+        from rembg import new_session, remove
+    except ImportError:
+        return None
+    global _REMBG
+    try:
+        _REMBG
+    except NameError:
+        _REMBG = new_session("birefnet-portrait")
+    out = remove(Image.fromarray(img), session=_REMBG, only_mask=True, post_process_mask=False)
+    return np.asarray(out.convert("L"))
+
+
 def _face_box(img: np.ndarray) -> tuple[float, float, float, float] | None:
     """Largest face (x, y, w, h) in pixels, using the YuNet detector already used for reframing."""
     import cv2
@@ -140,17 +160,16 @@ def _polish(im):
     a little sharpening, and a clean white outline (hides any rough mask edge)."""
     from PIL import Image, ImageEnhance, ImageFilter
     rgb, a = im.convert("RGB"), im.getchannel("A")
-    a = a.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(1.6))  # tuck in + feather
-    rgb = ImageEnhance.Brightness(rgb).enhance(1.14)
-    rgb = ImageEnhance.Contrast(rgb).enhance(1.12)
-    rgb = ImageEnhance.Color(rgb).enhance(1.12)
-    rgb = rgb.filter(ImageFilter.UnsharpMask(radius=2, percent=70, threshold=2))
-    pad = 16
+    rgb = ImageEnhance.Brightness(rgb).enhance(1.06)
+    rgb = ImageEnhance.Contrast(rgb).enhance(1.10)
+    rgb = ImageEnhance.Color(rgb).enhance(1.10)
+    rgb = rgb.filter(ImageFilter.UnsharpMask(radius=1.5, percent=60, threshold=2))
+    pad = 12
     w, h = im.size
     canvas = Image.new("RGBA", (w + pad * 2, h + pad), (0, 0, 0, 0))
     ring = Image.new("L", canvas.size, 0)
     ring.paste(a, (pad, pad))
-    ring = ring.filter(ImageFilter.MaxFilter(17)).filter(ImageFilter.GaussianBlur(1.2))
+    ring = ring.point(lambda v: 255 if v > 110 else 0).filter(ImageFilter.MaxFilter(11)).filter(ImageFilter.GaussianBlur(0.6))
     canvas.paste(Image.new("RGBA", canvas.size, (255, 255, 255, 255)), (0, 0), ring)
     person = rgb.convert("RGBA")
     person.putalpha(a)
