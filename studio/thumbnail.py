@@ -35,8 +35,23 @@ def _sharpness(img: np.ndarray) -> float:
     return float(lap.var())
 
 
-def candidate_times(pid: str, plan: dict, n: int = 3) -> list[float]:
-    """Source times with a large, centred face, spread across the kept footage."""
+def candidate_times(pid: str, plan: dict, n: int = 3, pool: int = 18) -> list[float]:
+    """Frames in the short pauses between words (mouth at rest, no mid-word face), in kept
+    footage where the camera shows the speaker; the sharpest few are used."""
+    from .pipeline import get_transcript
+    tl = plan_mod.timeline(plan)
+    cams = plan["source"].get("cam_ranges")
+    words = get_transcript(pid)["words"]
+    gaps = [(a["end"] + b["start"]) / 2 for a, b in zip(words, words[1:])
+            if 0.25 <= b["start"] - a["end"] <= 1.5 and tl.to_edit((a["end"] + b["start"]) / 2) is not None
+            and (not cams or any(x <= a["end"] <= y for x, y in cams))]
+    if len(gaps) >= n:
+        step = max(1, len(gaps) // pool)
+        return gaps[::step][:pool]
+    return _face_times(pid, plan, n)
+
+
+def _face_times(pid: str, plan: dict, n: int = 3) -> list[float]:
     from .pipeline import get_faces
     tl = plan_mod.timeline(plan)
     cams = plan["source"].get("cam_ranges")
@@ -90,12 +105,55 @@ def cutout(img: np.ndarray, out: Path) -> Path:
             cx = int(np.median(head)) if len(head) else int(np.median(xs))
             half = int((img.shape[0] - top) * 0.55)
             im = im.crop((max(0, cx - half), top, min(img.shape[1], cx + half), img.shape[0]))
+        im = _polish(im)
     im.save(out)
     return out
 
 
+def _polish(im):
+    """Thumbnail treatment for a webcam cut-out: smoother edges, brighter, punchier colour,
+    a little sharpening, and a clean white outline (hides any rough mask edge)."""
+    from PIL import Image, ImageEnhance, ImageFilter
+    rgb, a = im.convert("RGB"), im.getchannel("A")
+    a = a.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(1.6))  # tuck in + feather
+    rgb = ImageEnhance.Brightness(rgb).enhance(1.14)
+    rgb = ImageEnhance.Contrast(rgb).enhance(1.12)
+    rgb = ImageEnhance.Color(rgb).enhance(1.12)
+    rgb = rgb.filter(ImageFilter.UnsharpMask(radius=2, percent=70, threshold=2))
+    pad = 16
+    w, h = im.size
+    canvas = Image.new("RGBA", (w + pad * 2, h + pad), (0, 0, 0, 0))
+    ring = Image.new("L", canvas.size, 0)
+    ring.paste(a, (pad, pad))
+    ring = ring.filter(ImageFilter.MaxFilter(17)).filter(ImageFilter.GaussianBlur(1.2))
+    canvas.paste(Image.new("RGBA", canvas.size, (255, 255, 255, 255)), (0, 0), ring)
+    person = rgb.convert("RGBA")
+    person.putalpha(a)
+    canvas.alpha_composite(person, (pad, pad))
+    return canvas
+
+
+def screen_card(plan: dict, out: Path) -> Path | None:
+    """For screen + camera projects: a frame of the screen share, used as a card behind the speaker."""
+    if plan["source"].get("layout") != "screencam":
+        return None
+    tl = plan_mod.timeline(plan)
+    cams = plan["source"].get("cam_ranges") or []
+    split = [(a, b) for a, b in tl.segments if not any(x <= (a + b) / 2 <= y for x, y in cams)]
+    if not split:
+        return None
+    a, b = max(split, key=lambda s: s[1] - s[0])
+    img = _frame(plan["source"]["path"], a + (b - a) * 0.4)
+    if img is None:
+        return None
+    from PIL import Image
+    Image.fromarray(img).save(out, quality=92)
+    return out
+
+
 def make(pid: str, *, title: str | None = None, highlight: str | None = None, times: list[float] | None = None,
-         count: int = 3) -> list[Path]:
+         count: int = 3, photos: list[str] | None = None) -> list[Path]:
+    """photos: posed thumbnail photos to use instead of video frames (best results)."""
     proj = proj_mod.load(pid)
     d = proj_mod.project_dir(proj["id"])
     plan = plan_mod.load(d / "plan.json")
@@ -105,16 +163,22 @@ def make(pid: str, *, title: str | None = None, highlight: str | None = None, ti
     out_dir.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
     src = plan["source"]["path"]
-    times = times or candidate_times(pid, plan, count)
-    frames = [(t, f) for t in times if (f := _frame(src, t)) is not None]
-    frames.sort(key=lambda x: -_sharpness(x[1]))
+    times = times or ([] if photos else candidate_times(pid, plan, count))
+    if photos:
+        from PIL import Image
+        frames = [(0.0, np.asarray(Image.open(ph).convert("RGB"))) for ph in photos]
+    else:
+        frames = [(t, f) for t in times if (f := _frame(src, t)) is not None]
+    frames.sort(key=lambda x: -(_sharpness(x[1]) * (0.6 + x[1].mean() / 255)))
     results = []
     for k, (t, img) in enumerate(frames[:count], start=1):
         person = cutout(img, work / f"person_{k}.png")
         bg = work / f"frame_{k}.jpg"
         from PIL import Image
         Image.fromarray(img).save(bg, quality=92)
+        card = screen_card(plan, work / "screen_card.jpg")
         props = {**motion.brand_props(plan), **motion.stage_images({"image": str(person)}),
+                 "card": motion.stage_images({"image": str(card)})["image"] if card else "",
                  "background": motion.stage_images({"image": str(bg)})["image"],
                  "title": title, "highlight": highlight or "", "width": W, "height": H, "fps": 30,
                  "durationInFrames": 1}

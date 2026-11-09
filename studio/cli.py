@@ -102,7 +102,8 @@ def _import_screencam(a, folder: Path) -> int:
 def cmd_thumbnail(a):
     from . import thumbnail
     times = [float(x) for x in a.at.split(",")] if a.at else None
-    for p in thumbnail.make(proj_mod.resolve_id(a.project), title=a.title, highlight=a.highlight, times=times):
+    for p in thumbnail.make(proj_mod.resolve_id(a.project), title=a.title, highlight=a.highlight, times=times,
+                             photos=a.photo):
         print(p)
     return 0
 
@@ -520,6 +521,7 @@ def main(argv=None):
     s.add_argument("--title", help="thumbnail text (default: the plan topic); keep it to 3-6 words")
     s.add_argument("--highlight", help="word(s) drawn in the brand highlight color")
     s.add_argument("--at", help="source times to use, e.g. 12.5,40")
+    s.add_argument("--photo", action="append", help="posed photo(s) to use instead of video frames (repeatable)")
     s.set_defaults(fn=cmd_thumbnail)
 
     s = sub.add_parser("serve")

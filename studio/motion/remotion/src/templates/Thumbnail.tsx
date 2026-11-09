@@ -7,6 +7,7 @@ export type ThumbnailProps = BaseProps & {
   highlight?: string;   // word(s) drawn in the brand highlight color
   image?: string;       // speaker cut-out (transparent PNG), staged into public/
   background?: string;  // the original frame, used blurred behind everything
+  card?: string;        // optional screen frame (e.g. the website being shown), drawn as a tilted card
   logo?: string;
 };
 
@@ -28,10 +29,17 @@ export const Thumbnail: React.FC<ThumbnailProps> = (p) => {
       <AbsoluteFill style={{background: `linear-gradient(90deg, ${withAlpha(navy, 0.97)} 0%, ${withAlpha(navy, 0.9)} 42%, ${withAlpha(navy, 0.25)} 75%, ${withAlpha(navy, 0.1)} 100%)`}} />
       <div style={{position: 'absolute', right: -30, bottom: -120, width: 760, height: 760, borderRadius: '50%',
         background: `radial-gradient(circle, ${withAlpha(p.colors.primary, 0.55)} 0%, ${withAlpha(p.colors.primary, 0)} 65%)`}} />
+      {p.card ? (
+        <div style={{position: 'absolute', right: 250, top: 70, width: 560, height: 315, borderRadius: 18, overflow: 'hidden',
+          transform: 'rotate(-6deg)', border: '4px solid rgba(255,255,255,0.9)',
+          boxShadow: '0 30px 60px rgba(0,0,0,0.55)'}}>
+          <Img src={staticFile(p.card)} style={{width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'left top'}} />
+        </div>
+      ) : null}
       {p.image ? (
         <Img src={staticFile(p.image)} style={{position: 'absolute', right: -10, bottom: 0, height: 700, width: 660,
           objectFit: 'contain', objectPosition: 'right bottom',
-          filter: `drop-shadow(0 0 3px #fff) drop-shadow(0 18px 40px rgba(0,0,0,0.55))`}} />
+          filter: 'drop-shadow(0 18px 40px rgba(0,0,0,0.6))'}} />
       ) : null}
       <div style={{position: 'absolute', left: 64, top: 0, bottom: 0, width: 640, display: 'flex',
         flexDirection: 'column', justifyContent: 'center'}}>
