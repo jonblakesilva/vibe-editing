@@ -460,9 +460,9 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
             mix.append(f"[sfx{n}]")
             idx += 1
     if len(mix) == 1:
-        filters.append(f"{mix[0]}alimiter=limit=0.95[aout]")
+        filters.append(f"{mix[0]}alimiter=limit=0.95,apad[aout]")  # apad + -t: audio always as long as the picture
     else:
-        filters.append(f"{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0,alimiter=limit=0.95[aout]")
+        filters.append(f"{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0,alimiter=limit=0.95,apad[aout]")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_name(out_path.stem + ".part.mp4")
     script = work / f"{stem}.filter.txt"
