@@ -99,15 +99,40 @@ def cutout(img: np.ndarray, out: Path) -> Path:
             alpha = np.where(lab == (int(np.argmax(sizes)) + 1), alpha, 0).astype(np.uint8)
         im.putalpha(Image.fromarray(alpha))
         ys, xs = np.nonzero(alpha > 128)
-        if len(xs):  # head-and-shoulders crop centred on the head, a little air above it
-            top = max(0, ys.min() - int(img.shape[0] * 0.04))
-            head = xs[ys < ys.min() + (img.shape[0] - ys.min()) * 0.3]
-            cx = int(np.median(head)) if len(head) else int(np.median(xs))
+        if len(xs):  # head-and-shoulders crop centred on the FACE (a raised arm must not steer it)
+            face = _face_box(img)
+            if face:
+                fx, fy, fw, fh = face
+                cx = int(fx + fw / 2)
+                top = max(0, int(fy - fh * 1.1), ys.min() - int(img.shape[0] * 0.04))
+                top = min(top, int(fy - fh * 0.45))  # always keep the hair
+                top = max(0, top)
+            else:
+                top = max(0, ys.min() - int(img.shape[0] * 0.04))
+                head = xs[ys < ys.min() + (img.shape[0] - ys.min()) * 0.3]
+                cx = int(np.median(head)) if len(head) else int(np.median(xs))
             half = int((img.shape[0] - top) * 0.55)
             im = im.crop((max(0, cx - half), top, min(img.shape[1], cx + half), img.shape[0]))
         im = _polish(im)
     im.save(out)
     return out
+
+
+def _face_box(img: np.ndarray) -> tuple[float, float, float, float] | None:
+    """Largest face (x, y, w, h) in pixels, using the YuNet detector already used for reframing."""
+    import cv2
+    from . import config
+    if not config.YUNET_MODEL.exists():
+        return None
+    h, w = img.shape[:2]
+    scale = 640 / max(h, w)
+    small = cv2.resize(img[..., ::-1], (int(w * scale), int(h * scale)))
+    det = cv2.FaceDetectorYN.create(str(config.YUNET_MODEL), "", (small.shape[1], small.shape[0]), 0.6, 0.3, 50)
+    _, faces = det.detect(small)
+    if faces is None or not len(faces):
+        return None
+    f = max(faces, key=lambda r: r[2] * r[3])
+    return float(f[0]) / scale, float(f[1]) / scale, float(f[2]) / scale, float(f[3]) / scale
 
 
 def _polish(im):
