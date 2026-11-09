@@ -192,7 +192,8 @@ def make(pid: str, *, title: str | None = None, highlight: str | None = None, ti
     times = times or ([] if photos else candidate_times(pid, plan, count))
     if photos:
         from PIL import Image
-        frames = [(0.0, np.asarray(Image.open(ph).convert("RGB"))) for ph in photos]
+        from PIL import ImageOps
+        frames = [(0.0, np.asarray(ImageOps.exif_transpose(Image.open(ph)).convert("RGB"))) for ph in photos]
     else:
         frames = [(t, f) for t in times if (f := _frame(src, t)) is not None]
     frames.sort(key=lambda x: -(_sharpness(x[1]) * (0.6 + x[1].mean() / 255)))
