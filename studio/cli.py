@@ -99,6 +99,14 @@ def _import_screencam(a, folder: Path) -> int:
     return 0
 
 
+def cmd_thumbnail(a):
+    from . import thumbnail
+    times = [float(x) for x in a.at.split(",")] if a.at else None
+    for p in thumbnail.make(proj_mod.resolve_id(a.project), title=a.title, highlight=a.highlight, times=times):
+        print(p)
+    return 0
+
+
 def cmd_download(a):
     import subprocess
     out = config.DATA_HOME / "downloads"
@@ -507,8 +515,15 @@ def main(argv=None):
     s.add_argument("--all", action="store_true")
     s.set_defaults(fn=cmd_comments)
 
+    s = sub.add_parser("thumbnail", help="branded 1280x720 YouTube thumbnails (3 options)")
+    s.add_argument("project")
+    s.add_argument("--title", help="thumbnail text (default: the plan topic); keep it to 3-6 words")
+    s.add_argument("--highlight", help="word(s) drawn in the brand highlight color")
+    s.add_argument("--at", help="source times to use, e.g. 12.5,40")
+    s.set_defaults(fn=cmd_thumbnail)
+
     s = sub.add_parser("serve")
-    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--port", type=int, default=8766)  # Content Studio uses 8765
     s.set_defaults(fn=cmd_serve)
 
     a = ap.parse_args(argv)

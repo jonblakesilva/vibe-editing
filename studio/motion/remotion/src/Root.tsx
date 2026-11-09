@@ -11,6 +11,7 @@ import {EditorialTitle} from './templates/EditorialTitle';
 import {FloatingCards} from './templates/FloatingCards';
 import {StatPanels} from './templates/StatPanels';
 import {EndCard} from './templates/EndCard';
+import {Thumbnail} from './templates/Thumbnail';
 
 // Size, fps and length come from the props file the Python renderer writes, so one
 // template serves 16:9, 9:16 and 1:1 at any resolution.
@@ -55,5 +56,8 @@ export const Root: React.FC = () => (
     <Composition id="EndCard" component={EndCard as React.FC<any>} calculateMetadata={meta as any}
       width={1920} height={1080} fps={30} durationInFrames={120}
       defaultProps={{...base, durationInFrames: 120, text: 'Book a free strategy call', url: 'theleadventure.com', tagline: 'Built in the trades. Not in a marketing agency.'}} />
+    <Composition id="Thumbnail" component={Thumbnail as React.FC<any>} calculateMetadata={meta as any}
+      width={1280} height={720} fps={30} durationInFrames={1}
+      defaultProps={{...base, width: 1280, height: 720, durationInFrames: 1, title: 'See your website before you buy', highlight: 'website'}} />
   </>
 );

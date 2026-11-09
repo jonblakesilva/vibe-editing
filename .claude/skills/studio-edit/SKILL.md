@@ -114,7 +114,7 @@ speaker fills most of the title area (tight 9:16 crops) the title is put in fron
 note - pass that note on to the user.
 
 ## Review screen (Frame.io style)
-`http://127.0.0.1:8765/review/<project id>` - every rendered video with its versions (each re-render
+`http://127.0.0.1:8766/review/<project id>` - every rendered video with its versions (each re-render
 keeps the previous one as v1, v2, ...), side-by-side version compare, frame-accurate timecode, comments
 with time ranges (I/O), drawings on the frame, threaded replies, Done checkboxes and a per-video status
 (Needs review / In progress / Changes requested / Approved). Reviewer "Approved" is a sign-off on that
@@ -149,12 +149,19 @@ Venture, Booked Solid, Integrity Commercial Solutions). Add `vocabulary` (names,
 `lower_third.name/title`. Style references are for guidance only; never copy copyrighted media.
 
 ## Dashboard
-`studio serve` -> http://127.0.0.1:8765 (local only). Same projects, plans and jobs as the CLI.
+`studio serve` -> http://127.0.0.1:8766 (local only). Same projects, plans and jobs as the CLI.
 
 ## Health
 `studio doctor` (real tests; 30-60 s). Run it first if anything fails.
 
+## Thumbnails
+`studio thumbnail <project> --title "See Your Website Before You Buy" --highlight WEBSITE` writes 3 options
+to `exports/thumbnails/thumbnail_N.jpg` (1280x720). Each option uses a different sharp full-camera frame, cuts you out, and puts the title in the brand font on navy. Keep titles to 3-6 words. Highlight one word.
+
 ## Posting through GoHighLevel (only after the user approves each post)
+- Account ids, posting times (09:00 / 12:30 / 18:30 ET) and the default status live in
+  `~/Instagram Bot/config/studio.json` (Content Studio). Use them; Shorts go to The Lead Venture YouTube,
+  TikTok, Instagram and Facebook unless the user says otherwise. Default is drafts; schedule only when asked.
 - Location "The Lead Venture" (`6B4reCngPYfDkJwOtiM0`) has the social planner connected: YouTube
   (@theleadventure, @tjleads), TikTok (theleadventure, tjleads), Instagram (theleadventures, tjgetsleads),
   Facebook page, LinkedIn (Jonathan, Tye, company page), Google Business Profile, Pinterest.

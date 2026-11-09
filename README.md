@@ -73,7 +73,7 @@ preview, then render. The same steps by hand:
 .venv\Scripts\python -m studio render latest --shorts
 ```
 
-Or use the dashboard: `.venv\Scripts\python -m studio serve` → http://127.0.0.1:8765 (local only).
+Or use the dashboard: `.venv\Scripts\python -m studio serve` → http://127.0.0.1:8766 (local only).
 It has upload/drag-and-drop, project library, brand selection, mode selection, the transcript (click
 to jump, double-click to fix a word), the editing plan with a timeline of kept vs removed sections,
 caption/graphics/audio/export settings, Shorts with scores, real job progress with cancel/retry,
@@ -82,7 +82,7 @@ note, and it is pinned to that moment (shown as a dot on the timeline). Simple r
 zoom") can be applied with one click; for the rest, tell Claude "work through my comments".
 
 **Review screen (like Frame.io):** click **Review videos** (or open
-`http://127.0.0.1:8765/review/<project id>`). Every rendered video is listed with its versions — each
+`http://127.0.0.1:8766/review/<project id>`). Every rendered video is listed with its versions — each
 re-render keeps the previous one as v1, v2, v3 — and you can:
 - watch with frame-accurate timecode, step frame by frame, change speed, go full screen;
 - comment at a moment or over a range (press **I** and **O**), draw on the frame (pen, arrow, box);
