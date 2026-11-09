@@ -71,3 +71,14 @@ def test_premium_captions_sit_on_the_seam_only_while_split():
     ys = [float(line.split("\pos(")[1].split(",")[1].split(")")[0]) for line in ass.splitlines()
           if line.startswith("Dialogue: 1")]
     assert ys[0] > 1300 and ys[-1] == 960.0
+
+
+def test_phrase_retakes_inside_one_sentence():
+    from studio import analyze as an
+    words = _words([(0.0, "Or you finished a great project and you never asked, or you finished a great project "
+                          "and you forgot to ask, or you finished a great project and you forgot to ask for a review."),
+                    (12.0, "We've got local service pages. We've got location pages.")])
+    cuts = an.find_phrase_retakes(words)
+    assert len(cuts) == 1 and cuts[0]["start"] == 0.0
+    last_try = [w for w in words if w["start"] >= cuts[0]["end"]][0]
+    assert last_try["word"].lower().startswith("or") and last_try["start"] > 6  # the third try is kept

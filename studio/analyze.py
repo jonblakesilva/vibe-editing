@@ -187,6 +187,33 @@ def find_retakes(sents: list[dict], *, reset_pause: float = 2.5, window: float =
     return cuts
 
 
+def find_phrase_retakes(words: list[dict], *, n: int = 6, window: float = 25.0) -> list[dict]:
+    """Retries inside one run-on sentence: the same n+ words said again within `window` seconds
+    ("or you finished a great project and you never... or you finished a great project and you
+    forgot..."). Everything from the first try up to the last try goes; the last try stays."""
+    toks = [norm(w["word"]) for w in words]
+    cuts, i = [], 0
+    while i + n <= len(toks):
+        gram = toks[i:i + n]
+        if not all(gram):
+            i += 1
+            continue
+        last = None
+        for j in range(i + n, len(toks) - n + 1):
+            if words[j]["start"] - words[i]["start"] > window:
+                break
+            if toks[j:j + n] == gram:
+                last = j
+        if last is None:
+            i += 1
+            continue
+        cuts.append({"start": words[i]["start"], "end": words[last]["start"] - 0.05, "type": "repeat",
+                     "reason": "Phrase said again - earlier tries removed, last try kept",
+                     "text": " ".join(w["word"] for w in words[i:last])[:240], "confidence": 0.75})
+        i = last + n
+    return cuts
+
+
 def _strip_lead(tokens: list[str]) -> list[str]:
     i = 0
     while i < len(tokens) and tokens[i] in LEAD_WORDS:
@@ -319,6 +346,7 @@ def analyze(transcript: dict, *, pace: str = "natural", aggressive_fillers: bool
             + find_fillers(words, aggressive=aggressive_fillers or pace in ("tight", "shorts"))
             + find_restarts_and_repeats(words, sents)
             + find_retakes(sents)
+            + find_phrase_retakes(words)
             + find_noise_words(words))
     # Leading/trailing dead air before the first and after the last word.
     if words and words[0]["start"] > 0.5:
