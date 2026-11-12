@@ -226,6 +226,7 @@ When the owner gives a note, fix the issue, add a row here, and add a test that 
 | Owner note | Rule enforced | File |
 |---|---|---|
 | "subtitles covering my face in split screen" | Captions positioned to avoid seams in split layouts | captions.py (split_windows) |
+| "I don't like the subtitle colors" (red/green/teal) | Playbook captions use only the brand highlight (TLV orange) on <=20% of chunks when a highlight colour is set; white otherwise | captions.py (build_playbook accent), test_brand_highlight_replaces_red_green_teal |
 | "studio sound" | Default denoise is "studio" chain | render.py (DENOISE_CHAIN) |
 | "screenshots bigger, face in corner" | Screencam frames are enlarged, face stays in corner | compose.py (screencam layout) |
 | "lower third on my face" | LowerThird vertical position is top 16.5% of frame | LowerThird.tsx (top positioning) |

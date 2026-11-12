@@ -233,3 +233,15 @@ def test_existing_caption_styles_unchanged_by_playbook_work(style_name, size):
     ass = captions.build_ass(_REGRESSION_WORDS, dict(plan.CAPTION_STYLES[style_name]), width=W, height=H)
     got = hashlib.sha256(ass.encode()).hexdigest()
     assert got == _EXPECTED_HASHES[f"{style_name}_{W}x{H}"]
+
+
+def test_brand_highlight_replaces_red_green_teal():
+    """Owner note: the red/green/teal looked off-brand -- with a brand highlight colour the
+    playbook uses only that colour, on at most ~20% of chunks, and never the default palette."""
+    style = dict(captions.PLAYBOOK_STYLE, highlight="#F97316")
+    ass = captions.build_ass(_REGRESSION_WORDS, style, width=1080, height=1920)
+    for hexcol in captions.PLAYBOOK_COLOURS.values():
+        assert captions.ass_color(hexcol) not in ass
+    chunks = captions.chunk_playbook(_REGRESSION_WORDS)
+    tags = captions.colour_chunks(chunks, min_share=0.0, max_share=0.2)
+    assert sum(1 for t in tags if t) <= int(len(chunks) * 0.2)

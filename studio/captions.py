@@ -274,7 +274,8 @@ def chunk_playbook(words: list[dict], *, max_words: int = 3, gap: float = 0.45) 
     return chunks
 
 
-def colour_chunks(chunks: list[list[dict]], keywords: list[str] | None = None) -> list[str | None]:
+def colour_chunks(chunks: list[list[dict]], keywords: list[str] | None = None, *,
+                  min_share: float = 0.25, max_share: float = 0.45) -> list[str | None]:
     """Whole-chunk colour for the playbook style: red for loss/wrong words, green for
     action/payoff words, teal for plan-keyword or brand-vocabulary chunks. Priority is
     red > green > teal. The coloured share is clamped to 25-45% of the chunks: chunks
@@ -302,13 +303,13 @@ def colour_chunks(chunks: list[list[dict]], keywords: list[str] | None = None) -
 
     priority = {"teal": 0, "green": 1, "red": 2}
     coloured = [i for i, c in enumerate(colours) if c]
-    max_n = math.floor(n * 0.45)
+    max_n = math.floor(n * max_share)
     if len(coloured) > max_n:
         removable = sorted(coloured, key=lambda i: (priority[colours[i]], chunk_len(i)))
         for i in removable[: len(coloured) - max_n]:
             colours[i] = None
         coloured = [i for i, c in enumerate(colours) if c]
-    min_n = math.ceil(n * 0.25)
+    min_n = math.ceil(n * min_share)
     if len(coloured) < min_n:
         bare_idx = [i for i in range(n) if not colours[i]]
         bare_idx.sort(key=chunk_len, reverse=True)
@@ -339,6 +340,9 @@ def build_playbook(words: list[dict], style: dict, *, width: int, height: int, o
     edge_w = max(1.0, size * 0.035)  # ~2px at a 1080-wide frame
     pad_x, pad_y, radius = size * 0.5, size * 0.3, size * 0.32
     colours = {k: ass_color(v) for k, v in PLAYBOOK_COLOURS.items()}
+    accent = style.get("accent") or style.get("highlight")
+    if accent:  # brand mode: the brand accent colour instead of red/green/teal
+        colours = {k: ass_color(accent) for k in PLAYBOOK_COLOURS}
     anchors = sorted(style.get("anchors") or [])
     overrides = style.get("position_overrides") or []
     head = [
@@ -357,7 +361,10 @@ def build_playbook(words: list[dict], style: dict, *, width: int, height: int, o
         "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     chunks = chunk_playbook(words, max_words=int(style.get("max_words", 3)))
-    tags = colour_chunks(chunks, keywords=style.get("keywords"))
+    if style.get("accent") or style.get("highlight"):  # brand mode: only real keyword chunks, no filler colouring, <= ~20%
+        tags = colour_chunks(chunks, keywords=style.get("keywords"), min_share=0.0, max_share=0.2)
+    else:
+        tags = colour_chunks(chunks, keywords=style.get("keywords"))
     body = []
     n = len(chunks)
     for ci, ch in enumerate(chunks):
