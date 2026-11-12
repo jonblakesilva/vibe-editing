@@ -381,6 +381,10 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
 
 
 def _shorts_caption_style(plan: dict) -> dict:
+    # an explicit Shorts caption style (e.g. "playbook") overrides the long-form one for Shorts only
+    ss = (plan.get("shorts_settings") or {}).get("caption_style")
+    if ss and ss in plan_mod.CAPTION_STYLES:
+        return dict(plan_mod.CAPTION_STYLES[ss]) | {"style": ss}
     if plan["mode"] == "repurpose" and plan["captions"]["style"] in ("clean", "minimal") and plan["captions"].get("box") != "rounded":
         return {k: v for k, v in plan_mod.CAPTION_STYLES["karaoke"].items() if k != "highlight"} | {"style": "karaoke"}
     return {}
