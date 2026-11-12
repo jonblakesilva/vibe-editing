@@ -197,7 +197,7 @@ def render_main(pid: str, *, quality: str = "preview", progress=_noop,
         # B4 mouth check: the speaker's mouth shouldn't be covered by a caption or graphic
         mouth_faces = [] if laid_out else info.get("out_faces", faces)
         rep["mouth_issues"] = qa_mod.mouth_check(
-            mouth_faces, qa_mod.caption_boxes(words, oplan["captions"], info["width"], info["height"]),
+            mouth_faces, (info.get("caption_boxes") or qa_mod.caption_boxes(words, oplan["captions"], info["width"], info["height"])),
             qa_mod.graphic_boxes(gfx, info["width"], info["height"]), info["width"], info["height"],
             _joins(tl), tl.duration) if mouth_faces else []
         rep["word_issues"] = []
@@ -361,7 +361,7 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
             rep.update({"clip": clip["id"], "captions": info["captions"]})
             # B4 mouth check only (the listen-back transcription pass is too slow to run per Short)
             rep["mouth_issues"] = qa_mod.mouth_check(
-                info.get("out_faces", ofaces), qa_mod.caption_boxes(words, oplan["captions"], info["width"], info["height"]),
+                info.get("out_faces", ofaces), (info.get("caption_boxes") or qa_mod.caption_boxes(words, oplan["captions"], info["width"], info["height"])),
                 qa_mod.graphic_boxes(gfx, info["width"], info["height"]), info["width"], info["height"],
                 _joins(tl), tl.duration) if ofaces else []
             rep["word_issues"] = []

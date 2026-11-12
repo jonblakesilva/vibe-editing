@@ -385,7 +385,7 @@ def to_markdown(plan: dict) -> str:
                  else "- B-roll: none (add approved clips to ~/VibeStudio/broll)")
     c = plan["captions"]
     lines += ["", "## Captions", f"- Style: {c['style']} - {c.get('desc', '')}; font {c['font']}, "
-              f"size x{c.get('size_scale', 1)}, position {c['position']}, {'on' if c['enabled'] else 'off'}"]
+              f"size x{c.get('size_scale', 1)}, position {c.get('position', 'bottom')}, {'on' if c.get('enabled', True) else 'off'}"]
     a = plan["audio"]
     music_line = ("- Music: none" if not a.get("music") else
                   f"- Music: {a['music'].get('title') or Path(a['music']['path']).name} at "

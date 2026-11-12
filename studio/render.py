@@ -705,7 +705,7 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
         from . import qa as qa_mod
         contrast_issues = qa_mod.check_contrast(out_path, playbook_boxes, samples=40)
     return {"captions": cap_info, "width": W, "height": H, "notes": notes, "behind": len(behind),
-            "contrast_issues": contrast_issues, "out_faces": out_faces}
+            "contrast_issues": contrast_issues, "out_faces": out_faces, "caption_boxes": playbook_boxes}
 
 
 # ---------------------------------------------------------------- stage 3
