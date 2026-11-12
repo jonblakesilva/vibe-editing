@@ -17,7 +17,7 @@ from . import config
 
 REMOTION_DIR = config.MOTION_DIR / "remotion"
 TEMPLATES = ["KineticTitle", "EditorialTitle", "LowerThird", "ChapterCard", "CallToAction", "Callout", "BrandIntro",
-             "FloatingCards", "StatPanels", "EndCard", "File"]
+             "FloatingCards", "StatPanels", "EndCard", "File", "HyperCard"]
 _status: dict = {}
 
 
@@ -84,6 +84,24 @@ def render_overlay(graphic: dict, plan: dict, out_spec: dict, cache_dir: Path) -
         if not p.is_file():
             raise FileNotFoundError(f"Overlay file not found: {p}")
         return p
+    if graphic["template"] == "HyperCard":
+        # A HyperFrames card (see hyperframes.render_card): always rendered at its native
+        # 1920x1080, brand-styled; render.py scales/positions it per output and zone.
+        from . import brand as brand_mod
+        from . import hyperframes as hf
+        if not hf.available():
+            _status["skipped"] = _status.get("skipped", 0) + 1
+            return None
+        props = graphic.get("props", {})
+        try:
+            b = brand_mod.load(plan.get("brand") if plan.get("brand") not in (None, "default") else None)
+        except FileNotFoundError:
+            b = brand_mod.load(None)
+        fps = int(round(plan["source"].get("fps") or 30))
+        out = hf.render_card(props["card"], props.get("slots", {}), b, graphic["duration"], cache_dir, fps=fps)
+        if out is None:
+            _status["failed"] = _status.get("failed", 0) + 1
+        return out
     if graphic["template"] not in TEMPLATES:
         raise ValueError(f"Unknown motion template {graphic['template']}. Available: {', '.join(TEMPLATES)}")
     if not available():

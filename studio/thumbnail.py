@@ -1,9 +1,13 @@
-"""Branded YouTube thumbnails (1280x720).
+"""Branded YouTube thumbnails (1280x720 landscape, or 1080x1920 for the "shorts-cover"
+layout).
 
 Picks sharp frames where the speaker's face is clear, cuts the speaker out with the local
-MediaPipe selfie segmenter (falls back to the plain frame), and lays a big brand-font title
-beside them with the Remotion "Thumbnail" still template. Writes JPGs to exports/thumbnails.
-The title is the user's choice (or the plan topic); nothing is claimed that wasn't said."""
+rembg/MediaPipe segmenter (falls back to the plain frame), and lays out one of several
+proof-driven layouts -- modelled on the high-performing creators the owner likes -- with the
+Remotion "Thumbnail" still template. Writes JPGs to exports/thumbnails.
+
+The title, amounts and checklist items are always the caller's words: this module only
+lays out what it is given, it never invents a number or a claim."""
 from __future__ import annotations
 
 import json
@@ -17,6 +21,10 @@ from . import plan as plan_mod
 from . import project as proj_mod
 
 W, H = 1280, 720
+SHORTS_W, SHORTS_H = 1080, 1920
+
+LAYOUTS = ("face-number", "payment", "checklist", "screenshot", "two-person", "clean-white", "shorts-cover")
+CHIPS = ("maps_pin",)
 
 
 def _frame(src: str, t: float) -> np.ndarray | None:
@@ -70,6 +78,94 @@ def _face_times(pid: str, plan: dict, n: int = 3) -> list[float]:
     return sorted(set(round(t, 2) for t in picks))
 
 
+def fit_title(text: str, max_width: int, max_height: int, *, min_size: int = 40, max_size: int = 160,
+              char_width: float = 0.40, line_height: float = 1.08) -> dict:
+    """Largest size (px) of the bundled heavy condensed display font (Anton) at which
+    `text` wraps to fit inside max_width x max_height.
+
+    The width estimate (`char_width` * size per character) is a simple, font-specific
+    average for Anton's heavy condensed caps -- measured directly off a rendered sample
+    ("WIDE TEST LINE" at 150px renders ~0.37 * len * size wide; 0.40 keeps a small safety
+    margin for letter mixes with more wide characters) -- good enough to pick a size that
+    fills the box without the guesswork of an actual glyph measurement in Python. Words are wrapped,
+    never cut, so a long title still renders in full, just smaller and on more lines; it
+    only drops below `min_size` if even that doesn't fit, in which case `min_size` wins
+    and the caller should shorten the text or widen the box.
+
+    Returns {"size": int, "lines": [str, ...]} with lines already upper-cased, matching
+    the reference thumbnails' all-caps treatment."""
+    words = text.upper().split()
+    if not words:
+        return {"size": max_size, "lines": [""]}
+
+    def wrap(size: int) -> list[str]:
+        lines: list[str] = []
+        line: list[str] = []
+        for w in words:
+            trial = line + [w]
+            if len(" ".join(trial)) * size * char_width <= max_width or not line:
+                line = trial
+            else:
+                lines.append(" ".join(line))
+                line = [w]
+        if line:
+            lines.append(" ".join(line))
+        return lines
+
+    size = max_size
+    while size > min_size:
+        lines = wrap(size)
+        if len(lines) * size * line_height <= max_height:
+            return {"size": size, "lines": lines}
+        size -= 2
+    return {"size": min_size, "lines": wrap(min_size)}
+
+
+def _normalize_items(items: list) -> list[dict]:
+    """Checklist rows as {"text", "done"}. Accepts plain strings -- optionally ending (or
+    starting) with a check/cross glyph, e.g. "Follow-up ✓" or "More leads ✗" -- or
+    {"text": ..., "done": bool} dicts. The owner's own wording is kept as-is; nothing here
+    adds or removes a claim, only a layout decision (which row gets the highlighted tick)."""
+    marks = (("✓", True), ("✔", True), ("✗", False), ("✘", False), ("✕", False))
+    out = []
+    for raw in items:
+        if isinstance(raw, dict):
+            out.append({"text": str(raw.get("text", "")).strip(), "done": bool(raw.get("done", False))})
+            continue
+        text = str(raw).strip()
+        done = False
+        for mark, val in marks:
+            if text.endswith(mark) or text.startswith(mark):
+                done, text = val, text.replace(mark, "").strip()
+                break
+        out.append({"text": text, "done": done})
+    return out
+
+
+def _face_crop_box(face: tuple[float, float, float, float], img_w: int, img_h: int,
+                    mask_top: float | None = None) -> tuple[int, int, int, int]:
+    """Head-and-shoulders crop (left, top, right, bottom) around a detected face box.
+
+    The crop always bottoms out at the image's bottom edge (the speaker bleeds off the
+    frame, per the reference thumbnails), and `top` is pulled up just enough to keep the
+    hair in frame while still letting a close face fill most of the crop -- for a face
+    that fills a normal amount of a close headshot, that comfortably clears the "at least
+    40% of the crop's height" rule. `mask_top` (the topmost unmasked pixel row, if a
+    person cut-out is available) can pull `top` down further when the matte starts lower
+    than the face box alone would suggest."""
+    fx, fy, fw, fh = face
+    cx = fx + fw / 2
+    top = fy - fh * 1.1
+    if mask_top is not None:
+        top = max(top, mask_top - img_h * 0.04)
+    top = min(top, fy - fh * 0.45)  # always keep the hair
+    top = max(0.0, top)
+    half = (img_h - top) * 0.55
+    left = max(0.0, cx - half)
+    right = min(float(img_w), cx + half)
+    return int(left), int(top), int(right), img_h
+
+
 def cutout(img: np.ndarray, out: Path) -> Path:
     """Person cut-out as a transparent PNG (plain frame if segmentation is unavailable)."""
     from PIL import Image
@@ -102,17 +198,14 @@ def cutout(img: np.ndarray, out: Path) -> Path:
         if len(xs):  # head-and-shoulders crop centred on the FACE (a raised arm must not steer it)
             face = _face_box(img)
             if face:
-                fx, fy, fw, fh = face
-                cx = int(fx + fw / 2)
-                top = max(0, int(fy - fh * 1.1), ys.min() - int(img.shape[0] * 0.04))
-                top = min(top, int(fy - fh * 0.45))  # always keep the hair
-                top = max(0, top)
+                left, top, right, bottom = _face_crop_box(face, img.shape[1], img.shape[0], mask_top=float(ys.min()))
             else:
                 top = max(0, ys.min() - int(img.shape[0] * 0.04))
                 head = xs[ys < ys.min() + (img.shape[0] - ys.min()) * 0.3]
                 cx = int(np.median(head)) if len(head) else int(np.median(xs))
-            half = int((img.shape[0] - top) * 0.55)
-            im = im.crop((max(0, cx - half), top, min(img.shape[1], cx + half), img.shape[0]))
+                half = int((img.shape[0] - top) * 0.55)
+                left, right, bottom = max(0, cx - half), min(img.shape[1], cx + half), img.shape[0]
+            im = im.crop((left, top, right, bottom))
         im = _polish(im)
     im.save(out)
     return out
@@ -155,22 +248,34 @@ def _face_box(img: np.ndarray) -> tuple[float, float, float, float] | None:
     return float(f[0]) / scale, float(f[1]) / scale, float(f[2]) / scale, float(f[3]) / scale
 
 
-def _polish(im):
+def _polish(im, *, outline: bool = False):
     """Thumbnail treatment for a webcam cut-out: smoother edges, brighter, punchier colour,
-    a little sharpening, and a clean white outline (hides any rough mask edge)."""
+    a little sharpening, and -- by default -- a soft dark contact shadow rather than a thick
+    white outline (the reference thumbnails use at most a subtle rim light or shadow to
+    separate the speaker from the background; a heavy white ring reads as a cheap sticker).
+    Pass `outline=True` for the old white-ring treatment if a particular brand wants it."""
     from PIL import Image, ImageEnhance, ImageFilter
     rgb, a = im.convert("RGB"), im.getchannel("A")
     rgb = ImageEnhance.Brightness(rgb).enhance(1.06)
     rgb = ImageEnhance.Contrast(rgb).enhance(1.10)
     rgb = ImageEnhance.Color(rgb).enhance(1.10)
     rgb = rgb.filter(ImageFilter.UnsharpMask(radius=1.5, percent=60, threshold=2))
-    pad = 12
+    pad = 24 if outline else 16
     w, h = im.size
     canvas = Image.new("RGBA", (w + pad * 2, h + pad), (0, 0, 0, 0))
-    ring = Image.new("L", canvas.size, 0)
-    ring.paste(a, (pad, pad))
-    ring = ring.point(lambda v: 255 if v > 110 else 0).filter(ImageFilter.MaxFilter(11)).filter(ImageFilter.GaussianBlur(0.6))
-    canvas.paste(Image.new("RGBA", canvas.size, (255, 255, 255, 255)), (0, 0), ring)
+    mask = Image.new("L", canvas.size, 0)
+    mask.paste(a, (pad, pad))
+    edge = mask.point(lambda v: 255 if v > 110 else 0)
+    if outline:
+        ring = edge.filter(ImageFilter.MaxFilter(11)).filter(ImageFilter.GaussianBlur(0.6))
+        canvas.paste(Image.new("RGBA", canvas.size, (255, 255, 255, 255)), (0, 0), ring)
+    else:
+        # soft dark contact shadow, offset down-right a touch -- just enough depth to lift
+        # the cut-out off the background without drawing a line around the person
+        shadow_mask = edge.filter(ImageFilter.GaussianBlur(10))
+        shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        shadow.paste(Image.new("RGBA", canvas.size, (0, 0, 0, 150)), (5, 9), shadow_mask)
+        canvas.alpha_composite(shadow)
     person = rgb.convert("RGBA")
     person.putalpha(a)
     canvas.alpha_composite(person, (pad, pad))
@@ -195,10 +300,42 @@ def screen_card(plan: dict, out: Path) -> Path | None:
     return out
 
 
+def _cutout_photo(path: str, out: Path) -> Path:
+    """Cut out a single posed photo (used for `photo2` and standalone `screenshot`-adjacent
+    stills), the same treatment the video-frame path gets."""
+    from PIL import Image, ImageOps
+    img = np.asarray(ImageOps.exif_transpose(Image.open(path)).convert("RGB"))
+    return cutout(img, out)
+
+
 def make(pid: str, *, title: str | None = None, highlight: str | None = None, times: list[float] | None = None,
          count: int = 3, photos: list[str] | None = None, out_dir: Path | None = None,
-         name: str = "thumbnail") -> list[Path]:
-    """photos: posed thumbnail photos to use instead of video frames (best results)."""
+         name: str = "thumbnail", layout: str = "face-number", items: list | None = None,
+         amount: str | None = None, photo2: str | None = None, screenshot: str | None = None,
+         screenshot_box: tuple[float, float, float, float] | None = None,
+         chip: str | None = None) -> list[Path]:
+    """photos: posed thumbnail photos to use instead of video frames (best results).
+
+    layout: "face-number" (default, big edge-cropped face + title), "payment" (+ a
+    payment-received card for `amount`), "checklist" (+ 2-3 `items`, one ticked),
+    "screenshot" (+ a tilted `screenshot` card, optionally circled with `screenshot_box`
+    = (x, y, w, h) in 0-1 fractions of the screenshot), "two-person" (a second speaker from
+    `photo2`), "clean-white" (face-number on a plain light background) or "shorts-cover"
+    (1080x1920: screen/background on top, face on the bottom, title on the seam).
+    `chip`: an optional small icon chip next to the title, e.g. "maps_pin"."""
+    if layout not in LAYOUTS:
+        raise ValueError(f"Unknown thumbnail layout {layout!r}; choose one of: {', '.join(LAYOUTS)}")
+    if layout == "payment" and not amount:
+        raise ValueError('layout="payment" needs an `amount` (e.g. "$30,000+"); nothing is invented here.')
+    if layout == "checklist" and not items:
+        raise ValueError('layout="checklist" needs `items` (2-3 strings, e.g. ["More leads ✗", "Follow-up ✓"]).')
+    if layout == "two-person" and not photo2:
+        raise ValueError('layout="two-person" needs `photo2` (the second speaker\'s photo).')
+    if layout == "screenshot" and not screenshot:
+        raise ValueError('layout="screenshot" needs `screenshot` (the image/frame to feature).')
+    if chip is not None and chip not in CHIPS:
+        raise ValueError(f"Unknown chip {chip!r}; choose one of: {', '.join(CHIPS)}")
+
     proj = proj_mod.load(pid)
     d = proj_mod.project_dir(proj["id"])
     plan = plan_mod.load(d / "plan.json")
@@ -208,10 +345,30 @@ def make(pid: str, *, title: str | None = None, highlight: str | None = None, ti
     out_dir.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
     src = plan["source"]["path"]
+    out_w, out_h = (SHORTS_W, SHORTS_H) if layout == "shorts-cover" else (W, H)
+
+    # text box the title must auto-fit into without ever touching the face OR a proof
+    # element -- these max_height numbers match the reserved bands in Thumbnail.tsx's
+    # BANDS (studio/motion/remotion/src/templates/Thumbnail.tsx): payment/checklist
+    # reserve room below the title for their card, screenshot reserves room above it.
+    _title_budget = {"payment": 380, "checklist": 300, "screenshot": 240}
+    if layout == "shorts-cover":
+        fit = fit_title(title, max_width=out_w - 200, max_height=240, min_size=52, max_size=108)
+    elif layout == "two-person":
+        fit = fit_title(title, max_width=560, max_height=out_h - 220, min_size=44, max_size=140)
+    else:
+        fit = fit_title(title, max_width=560, max_height=_title_budget.get(layout, out_h - 200),
+                         min_size=40, max_size=150)
+
+    checklist = _normalize_items(items) if items else None
+    photo2_path = None
+    if layout == "two-person" and photo2:
+        photo2_path = _cutout_photo(photo2, work / "person2.png")
+    screenshot_staged = str(Path(screenshot).expanduser()) if screenshot else None
+
     times = times or ([] if photos else candidate_times(pid, plan, count))
     if photos:
-        from PIL import Image
-        from PIL import ImageOps
+        from PIL import Image, ImageOps
         frames = [(0.0, np.asarray(ImageOps.exif_transpose(Image.open(ph)).convert("RGB"))) for ph in photos]
     else:
         frames = [(t, f) for t in times if (f := _frame(src, t)) is not None]
@@ -224,15 +381,37 @@ def make(pid: str, *, title: str | None = None, highlight: str | None = None, ti
         Image.fromarray(img).save(bg, quality=92)
         card = screen_card(plan, work / "screen_card.jpg")
         props = {**motion.brand_props(plan), **motion.stage_images({"image": str(person)}),
-                 "card": motion.stage_images({"image": str(card)})["image"] if card else "",
-                 "background": motion.stage_images({"image": str(bg)})["image"],
-                 "title": title, "highlight": highlight or "", "width": W, "height": H, "fps": 30,
+                 "layout": layout, "titleSize": fit["size"], "titleLines": fit["lines"],
+                 "title": title, "highlight": highlight or "", "width": out_w, "height": out_h, "fps": 30,
                  "durationInFrames": 1}
+        # a blurred real frame only reads well as a background when it IS the real frame behind
+        # the speaker; a posed photo blurred behind itself just looks like a mistake
+        if layout == "shorts-cover" and card:
+            # screen + camera project: the shorts-cover top half is the screen, not another
+            # copy of the camera frame the face was just cut from
+            props["background"] = motion.stage_images({"image": str(card)})["image"]
+        elif not photos:
+            props["background"] = motion.stage_images({"image": str(bg)})["image"]
+        if card and layout not in ("screenshot", "clean-white", "shorts-cover"):
+            props["card"] = motion.stage_images({"image": str(card)})["image"]
+        if layout == "two-person" and photo2_path:
+            props["image2"] = motion.stage_images({"image": str(photo2_path)})["image"]
+        if layout == "payment":
+            props["amount"] = amount
+        if layout == "checklist":
+            props["items"] = checklist
+        if layout == "screenshot" and screenshot_staged:
+            props["screenshot"] = motion.stage_images({"image": screenshot_staged})["image"]
+            if screenshot_box:
+                x, y, bw, bh = screenshot_box
+                props["screenshotBox"] = {"x": x, "y": y, "w": bw, "h": bh}
+        if chip:
+            props["chip"] = chip
         pf = work / f"thumb_{k}.props.json"
         pf.write_text(json.dumps(props), encoding="utf-8")
         png = work / f"thumb_{k}.png"
         r = subprocess.run([str(motion.remotion_bin()), "still", "src/index.ts", "Thumbnail", str(png),
-                            f"--props={pf}", "--frame=0", "--log=error", f"--width={W}", f"--height={H}"],
+                            f"--props={pf}", "--frame=0", "--log=error", f"--width={out_w}", f"--height={out_h}"],
                            cwd=motion.REMOTION_DIR, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if r.returncode != 0 or not png.exists():
             raise RuntimeError(f"Thumbnail render failed:\n{r.stderr[-1200:]}")

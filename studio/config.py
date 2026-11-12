@@ -11,6 +11,7 @@ PLUGIN = REPO / "plugins" / "vibe-editing"
 FONTS_DIR = PLUGIN / "skills" / "caption-clips" / "fonts"
 YUNET_MODEL = PLUGIN / "skills" / "horizontal-to-vertical" / "scripts" / "yunet.onnx"
 MOTION_DIR = STUDIO / "motion"
+HYPERFRAMES_DIR = MOTION_DIR / "hyperframes"
 
 # User data lives outside the git checkout by default so footage never lands in the repo.
 DATA_HOME = Path(os.environ.get("VIBE_STUDIO_HOME", Path.home() / "VibeStudio")).expanduser()

@@ -11,8 +11,9 @@ from . import analyze as an
 from . import brand as brand_mod
 from . import plan as plan_mod
 from . import project as proj_mod
+from . import qa as qa_mod
 from . import media, reframe, render, repurpose, shorts, transcribe
-from .timeline import Timeline, keep_segments
+from .timeline import Timeline, keep_segments, pad_cut_starts
 
 
 def _noop(stage: str, p: float) -> None:
@@ -108,7 +109,8 @@ def make_plan(pid: str, *, mode: str | None = None, outputs: list[str] | None = 
         plan["clips"] = shorts.find_clips(t, analysis, count=shorts_count, min_len=short_min,
                                           max_len=short_max, topics=topics)
         plan["shorts_settings"] = {"count": shorts_count, "min_len": short_min, "max_len": short_max,
-                                   "outputs": ["shorts"], "captions": "both"}
+                                   "outputs": ["shorts"], "captions": "both",
+                                   "pace": plan.get("shorts_settings", {}).get("pace", "playbook")}
         if mode == "repurpose":
             plan["outputs"] = [dict(plan_mod.PLATFORM_OUTPUTS["youtube"], name="youtube")]
     if mode == "shorts":
@@ -192,10 +194,18 @@ def render_main(pid: str, *, quality: str = "preview", progress=_noop,
         sheet = render.contact_sheet(out_path, gt, p["exports"] / "qa" / f"{out_path.stem}_sheet.jpg",
                                      width=480 if out["width"] >= out["height"] else 240)
         rep["qa_sheet"] = str(sheet) if sheet else None
+        # B4 mouth check: the speaker's mouth shouldn't be covered by a caption or graphic
+        mouth_faces = [] if laid_out else info.get("out_faces", faces)
+        rep["mouth_issues"] = qa_mod.mouth_check(
+            mouth_faces, qa_mod.caption_boxes(words, oplan["captions"], info["width"], info["height"]),
+            qa_mod.graphic_boxes(gfx, info["width"], info["height"]), info["width"], info["height"],
+            _joins(tl), tl.duration) if mouth_faces else []
+        rep["word_issues"] = []
         if quality == "preview" and out == plan["outputs"][0] and tl.duration < 15 * 60:
             progress("listen-back check", 0.0)
-            rep["listen_issues"] = listen_check_isolated(out_path, p["work"])
+            rep["listen_issues"] = listen_check_isolated(out_path, p["work"], tl=tl, words=words)
             progress("listen-back check", 1.0)
+            rep["word_issues"] = [i for i in (rep["listen_issues"] or []) if i.get("type") == "clipped_word"]
         results.append(rep)
     if plan["mode"] == "longform" or plan["mode"] == "repurpose":
         _write_extras(p["exports"], plan, tl)
@@ -209,10 +219,34 @@ def render_main(pid: str, *, quality: str = "preview", progress=_noop,
     return results
 
 
-def listen_check(out_path: Path, work: Path) -> list[dict]:
+def _joins(tl: Timeline) -> list[float]:
+    """Edited-time position of every cut: the boundary between one kept segment and the
+    next (there's no gap in edited time, so each boundary is a single point)."""
+    return [round(tl.offsets[i], 3) for i in range(1, len(tl.segments))]
+
+
+def _write_expected_words(work: Path, out_path: Path, tl: Timeline, words: list[dict]) -> Path:
+    """expected_words (edited time, from the Timeline mapping of kept transcript words) plus
+    the joins, for the isolated listen_check subprocess to run qa.word_whole_check against."""
+    d = work / "_listen"
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{out_path.stem}_expected.json"
+    data = {"words": [{"word": w["word"], "start": w["start"], "end": w["end"]} for w in words],
+            "joins": _joins(tl)}
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def listen_check(out_path: Path, work: Path, expected_path: Path | None = None,
+                 joins: list[float] | None = None) -> list[dict]:
     """Listen back to the RENDERED video: transcribe it and flag leftover restarts, repeats,
     false starts and filler words, with their times in the edited video. Catches stumbles the
-    first transcription merged into a single long word."""
+    first transcription merged into a single long word.
+
+    With `expected_path` (a JSON file of {"words": [...], "joins": [...]}, see
+    _write_expected_words), also runs the B3 "every word whole" check: words the edit kept,
+    compared to what was actually heard near every cut. `joins`, when given, overrides the
+    joins stored in that JSON."""
     from . import analyze as an_mod
     heard = transcribe.transcribe(out_path, work / "_listen" / out_path.stem, model=transcribe.DEFAULT_MODEL)
     words = heard["words"]
@@ -230,6 +264,12 @@ def listen_check(out_path: Path, work: Path) -> list[dict]:
                                "text": " ".join(w["word"] for w in words[i:j + 2]),
                                "reason": f'"{words[i]["word"]} {words[i + 1]["word"]}" said twice close together'})
                 break
+    if expected_path is not None:
+        data = json.loads(Path(expected_path).read_text(encoding="utf-8"))
+        j = joins if joins is not None else data["joins"]
+        for wi in qa_mod.word_whole_check(data["words"], words, j):
+            issues.append({"at": wi["at"], "end": wi["at"], "type": "clipped_word",
+                           "text": wi["heard"] or wi["expected"], "reason": wi["reason"]})
     seen, out = set(), []
     for it in sorted(issues, key=lambda x: x["at"]):
         key = round(it["at"])
@@ -239,15 +279,23 @@ def listen_check(out_path: Path, work: Path) -> list[dict]:
     return out
 
 
-def listen_check_isolated(out_path: Path, work: Path, timeout: int = 900) -> list[dict] | None:
+def listen_check_isolated(out_path: Path, work: Path, timeout: int = 900, *,
+                          tl: Timeline | None = None, words: list[dict] | None = None) -> list[dict] | None:
     """Run listen_check in a separate process. Inside a render the speaker-mask library and the
-    transcriber can contend for threads and stall; a fresh process avoids that."""
+    transcriber can contend for threads and stall; a fresh process avoids that.
+
+    When `tl` and `words` (the edited-time kept transcript words) are given, also writes the
+    expected-words/joins JSON for the B3 word-whole check and passes its path through to the
+    subprocess."""
     import sys
+    expected_path = _write_expected_words(work, out_path, tl, words) if (tl is not None and words is not None) else None
     code = ("import json,sys; from pathlib import Path; from studio import pipeline; "
-            "print('@@'+json.dumps(pipeline.listen_check(Path(sys.argv[1]), Path(sys.argv[2]))))")
+            "ep = Path(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] != '-' else None; "
+            "print('@@'+json.dumps(pipeline.listen_check(Path(sys.argv[1]), Path(sys.argv[2]), expected_path=ep)))")
+    args = [sys.executable, "-c", code, str(out_path), str(work), str(expected_path) if expected_path else "-"]
     try:
-        r = subprocess.run([sys.executable, "-c", code, str(out_path), str(work)], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=timeout, cwd=str(Path(__file__).resolve().parent.parent))
+        r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout, cwd=str(Path(__file__).resolve().parent.parent))
     except subprocess.TimeoutExpired:
         return None
     line = next((l for l in r.stdout.splitlines() if l.startswith("@@")), None)
@@ -262,7 +310,9 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
     _require_approved(plan, quality)
     t = get_transcript(pid)
     fps = plan["source"].get("fps") or 30.0
-    analysis = an.analyze(t, pace="shorts", duration=plan["source"]["duration"])
+    pace = plan.get("shorts_settings", {}).get("pace", "shorts")
+    analysis = an.analyze(t, pace=pace, duration=plan["source"]["duration"],
+                          filler_guard=bool(plan.get("filler_guard")))
     faces_src = get_faces(pid, progress) if plan["source"].get("width") else []
     clips = [c for c in plan.get("clips", []) if c.get("enabled", True) and (not ids or c["id"] in ids)]
     results = []
@@ -277,6 +327,8 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
                        if c["end"] > clip["start"] and c["start"] < clip["end"]]
         for k in plan.get("keep_overrides", []):
             window_cuts = plan_mod._subtract(window_cuts, k["start"], k["end"])
+        if plan.get("cut_pad"):
+            window_cuts = pad_cut_starts(window_cuts, plan["cut_pad"])
         window_cuts += [{"start": 0, "end": clip["start"], "enabled": True},
                         {"start": clip["end"], "end": plan["source"]["duration"], "enabled": True}]
         segs = keep_segments(plan["source"]["duration"], window_cuts, fps=fps)
@@ -285,11 +337,13 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
         cuts = {}
         words = tl.map_words(t["words"])
         faces = _faces_on_timeline(faces_src, tl)
+        zooms = plan_mod.default_zooms(
+            {"sentences": [s for s in analysis["sentences"] if clip["start"] <= s["start"] < clip["end"]]},
+            "talking_head", "shorts")
+        if pace == "playbook":
+            zooms = zooms + _clip_punch_ins(plan, clip, t["words"])
         splan = dict(plan, captions=dict(plan["captions"], **_shorts_caption_style(plan)),
-                     zooms=[z for z in plan_mod.default_zooms(
-                         {"sentences": [s for s in analysis["sentences"] if clip["start"] <= s["start"] < clip["end"]]},
-                         "talking_head", "shorts")],
-                     graphics=_short_graphics(plan, clip))
+                     zooms=zooms, graphics=_short_graphics(plan, clip))
         for out_name in plan.get("shorts_settings", {}).get("outputs", ["shorts"]):
             out = dict(plan_mod.PLATFORM_OUTPUTS[out_name], name=out_name)
             base = f"short{k + 1:02d}_{_safe(clip['title'])}_{out_name}{'_preview' if quality == 'preview' else ''}"
@@ -305,6 +359,12 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
                                  graphics=gfx, faces=ofaces, burn_captions=True, progress=sub, cancel=cancel)
             rep = render.verify(out_path, expect_w=info["width"], expect_h=info["height"], expect_dur=tl.duration)
             rep.update({"clip": clip["id"], "captions": info["captions"]})
+            # B4 mouth check only (the listen-back transcription pass is too slow to run per Short)
+            rep["mouth_issues"] = qa_mod.mouth_check(
+                info.get("out_faces", ofaces), qa_mod.caption_boxes(words, oplan["captions"], info["width"], info["height"]),
+                qa_mod.graphic_boxes(gfx, info["width"], info["height"]), info["width"], info["height"],
+                _joins(tl), tl.duration) if ofaces else []
+            rep["word_issues"] = []
             results.append(rep)
             if clean_copy and quality == "final":
                 clean = out_path.with_name(base + "_clean.mp4")
@@ -312,6 +372,7 @@ def render_shorts(pid: str, *, quality: str = "preview", ids: list[str] | None =
                                       faces=ofaces, burn_captions=False, progress=sub, cancel=cancel)
                 rep2 = render.verify(clean, expect_w=info2["width"], expect_h=info2["height"], expect_dur=tl.duration)
                 rep2["clip"] = clip["id"]
+                rep2["mouth_issues"], rep2["word_issues"] = rep["mouth_issues"], []
                 results.append(rep2)
     plan = plan_mod.load(p["plan"])
     plan["last_shorts_render"] = {"quality": quality, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "results": results}
@@ -323,6 +384,19 @@ def _shorts_caption_style(plan: dict) -> dict:
     if plan["mode"] == "repurpose" and plan["captions"]["style"] in ("clean", "minimal") and plan["captions"].get("box") != "rounded":
         return {k: v for k, v in plan_mod.CAPTION_STYLES["karaoke"].items() if k != "highlight"} | {"style": "karaoke"}
     return {}
+
+
+def _clip_punch_ins(plan: dict, clip: dict, words: list[dict]) -> list[dict]:
+    """Playbook pace: punch-in zooms for one Short, in the same zoom-dict shape as
+    plan_mod.default_zooms (id/start/end/scale/kind/enabled/reason), respecting a
+    screen-share layout the way plan_mod._zooms_for_layout does for the other zooms."""
+    clip_words = [w for w in words if clip["start"] <= w["start"] < clip["end"]]
+    keywords = plan.get("summary", {}).get("keywords")
+    punches = an.punch_ins(clip_words, clip["end"] - clip["start"], keywords=keywords)
+    zooms = [{"id": f"p{n + 1}", "start": p["start"], "end": p["end"], "scale": p["scale"],
+             "kind": p.get("kind", "punch"), "enabled": True, "reason": f'Punch-in on "{p["word"]}"'}
+            for n, p in enumerate(punches)]
+    return plan_mod._zooms_for_layout(zooms, plan["source"])
 
 
 def _short_graphics(plan: dict, clip: dict) -> list[dict]:

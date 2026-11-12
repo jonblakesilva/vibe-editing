@@ -1,0 +1,9 @@
+{
+  "name": "vibe-studio-hyperframes",
+  "version": "1.0.0",
+  "private": true,
+  "devDependencies": {
+    "hyperframes": "0.7.109",
+    "gsap": "3.14.2"
+  }
+}

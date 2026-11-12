@@ -3,6 +3,8 @@ SRT/VTT sidecar files. Captions only use words that were actually spoken; manual
 corrections change spelling, never timing."""
 from __future__ import annotations
 
+import math
+import re
 from pathlib import Path
 
 PUNCT_END = (".", "?", "!")
@@ -213,8 +215,194 @@ def build_premium(words: list[dict], style: dict, *, width: int, height: int, of
     return "\n".join(head + body) + "\n"
 
 
+# ---------------------------------------------------------------- playbook style
+#
+# Nate Herk's editing-playbook caption look: punchy 1-3 word chunks, hard swap (no
+# fade/pop), all on one dark box with a thin light edge, whole-chunk colour on
+# loss/action/key-concept words. `anchors` (edited-time join seconds) and
+# `position_overrides` ([{start, end, cy}] pixel y, edited time) and `keywords`
+# travel inside `style` itself rather than as extra params, so build_ass/write_all
+# don't need new kwargs and plan wiring (a later task) only has to set style keys.
+
+PLAYBOOK_BOX_COLOR = "#0B0B0F"
+PLAYBOOK_BOX_OPACITY = 0.86
+PLAYBOOK_EDGE_COLOR = "#FFFFFF"
+PLAYBOOK_EDGE_OPACITY = 0.25
+PLAYBOOK_COLOURS = {"red": "#FF4D4D", "green": "#3DDC84", "teal": "#2EC4B6"}
+
+PLAYBOOK_STYLE = {
+    "style": "playbook", "font": "Montserrat ExtraBold", "size": 62, "primary": "#FFFFFF",
+    "box": "dark", "box_color": PLAYBOOK_BOX_COLOR, "box_opacity": PLAYBOOK_BOX_OPACITY,
+    "edge_color": PLAYBOOK_EDGE_COLOR, "edge_opacity": PLAYBOOK_EDGE_OPACITY,
+    "uppercase": True, "max_words": 3, "lines": 1, "animation": "none", "fps": 30,
+    "desc": "Nate Herk playbook: punchy 1-3 word chunks on one dark box, red/green/teal keyword colour",
+}
+
+_NO_SPLIT_AFTER = {"a", "the", "to", "of"}
+
+RED_WORDS = {"lose", "losing", "lost", "wrong", "mistake", "never", "stop", "fail", "waste", "cost",
+             "problem", "miss", "missed", "bad", "broke", "dead"}
+GREEN_WORDS = {"book", "booked", "get", "grow", "double", "more", "results", "win", "save", "start",
+               "build", "call", "free", "close", "money"}
+
+
+def _bare(word: str) -> str:
+    return re.sub(r"[^a-z0-9$]", "", word.strip().lower())
+
+
+def chunk_playbook(words: list[dict], *, max_words: int = 3, gap: float = 0.45) -> list[list[dict]]:
+    """1-3 word chunks for the playbook style, split on phrase boundaries (a pause, a
+    sentence end, or the word cap). Never ends a chunk right on "a/the/to/of" when that's
+    avoidable: that word is carried into the next chunk instead."""
+    chunks, cur = [], []
+    for w in words:
+        paused = bool(cur) and w["start"] - cur[-1]["end"] > gap
+        if cur and (paused or len(cur) >= max_words):
+            if not paused and len(cur) > 1 and _bare(cur[-1]["word"]) in _NO_SPLIT_AFTER:
+                carry = cur.pop()
+                chunks.append(cur)
+                cur = [carry]
+            else:
+                chunks.append(cur)
+                cur = []
+        cur.append(w)
+        if w["word"].endswith(PUNCT_END):
+            chunks.append(cur)
+            cur = []
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def colour_chunks(chunks: list[list[dict]], keywords: list[str] | None = None) -> list[str | None]:
+    """Whole-chunk colour for the playbook style: red for loss/wrong words, green for
+    action/payoff words, teal for plan-keyword or brand-vocabulary chunks. Priority is
+    red > green > teal. The coloured share is clamped to 25-45% of the chunks: chunks
+    over the 45% cap are un-coloured (teal first, then green), and if under 25%, teal is
+    added to the chunks with the longest words until 25% is reached."""
+    kw = {_bare(k) for k in (keywords or []) if _bare(k)}
+    colours: list[str | None] = []
+    for ch in chunks:
+        bare = [_bare(w["word"]) for w in ch]
+        has_money = any("$" in w["word"] for w in ch)
+        if any(b in RED_WORDS for b in bare):
+            colours.append("red")
+        elif has_money or any(b in GREEN_WORDS for b in bare):
+            colours.append("green")
+        elif kw and any(b in kw for b in bare):
+            colours.append("teal")
+        else:
+            colours.append(None)
+    n = len(colours)
+    if n == 0:
+        return colours
+
+    def chunk_len(i: int) -> int:
+        return sum(len(w["word"]) for w in chunks[i])
+
+    priority = {"teal": 0, "green": 1, "red": 2}
+    coloured = [i for i, c in enumerate(colours) if c]
+    max_n = math.floor(n * 0.45)
+    if len(coloured) > max_n:
+        removable = sorted(coloured, key=lambda i: (priority[colours[i]], chunk_len(i)))
+        for i in removable[: len(coloured) - max_n]:
+            colours[i] = None
+        coloured = [i for i, c in enumerate(colours) if c]
+    min_n = math.ceil(n * 0.25)
+    if len(coloured) < min_n:
+        bare_idx = [i for i in range(n) if not colours[i]]
+        bare_idx.sort(key=chunk_len, reverse=True)
+        for i in bare_idx[: min_n - len(coloured)]:
+            colours[i] = "teal"
+    return colours
+
+
+def build_playbook(words: list[dict], style: dict, *, width: int, height: int, offset: float = 0.0) -> str:
+    """Playbook captions: one dark rounded box (with a thin light edge drawn first,
+    the same way build_premium layers its box) that hard-swaps between 1-3 word
+    chunks with a 2-frame lead-in, no fade. A chunk whose span crosses an edit join
+    (`style["anchors"]`, edited-time seconds) is split into two events at the join, so
+    its box/text can move with the cut via `style["position_overrides"]`
+    ([{start, end, cy}], pixel y in edited time) without ever covering the mouth."""
+    from . import fontmetrics
+    band = caption_band(width, height, style)
+    size, cy_default = band["size"], band["cy"]
+    font = style.get("font", "Montserrat ExtraBold")
+    fps = float(style.get("fps", 30))
+    lead_in = 2 / fps
+    spacing = size * 0.01
+    primary = ass_color(style.get("primary", "#FFFFFF"))
+    box_color = style.get("box_color", PLAYBOOK_BOX_COLOR)
+    box_a = int(round((1 - float(style.get("box_opacity", PLAYBOOK_BOX_OPACITY))) * 255))
+    edge_color = style.get("edge_color", PLAYBOOK_EDGE_COLOR)
+    edge_a = int(round((1 - float(style.get("edge_opacity", PLAYBOOK_EDGE_OPACITY))) * 255))
+    edge_w = max(1.0, size * 0.035)  # ~2px at a 1080-wide frame
+    pad_x, pad_y, radius = size * 0.5, size * 0.3, size * 0.32
+    colours = {k: ass_color(v) for k, v in PLAYBOOK_COLOURS.items()}
+    anchors = sorted(style.get("anchors") or [])
+    overrides = style.get("position_overrides") or []
+    head = [
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {width}", f"PlayResY: {height}",
+        "WrapStyle: 2", "ScaledBorderAndShadow: yes", "YCbCr Matrix: TV.709", "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
+        "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Cap,{font},{size},{primary},{primary},&H00000000,&H00000000,-1,0,0,0,100,100,"
+        f"{spacing:.1f},0,1,0,0,5,0,0,0,1",
+        f"Style: Box,Arial,10,{ass_color(box_color, box_a)},{ass_color(box_color, box_a)},&H00000000,"
+        f"&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1",
+        f"Style: BoxEdge,Arial,10,{ass_color(edge_color, edge_a)},{ass_color(edge_color, edge_a)},"
+        f"&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1",
+        "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    chunks = chunk_playbook(words, max_words=int(style.get("max_words", 3)))
+    tags = colour_chunks(chunks, keywords=style.get("keywords"))
+    body = []
+    n = len(chunks)
+    for ci, ch in enumerate(chunks):
+        texts = [_clean(w["word"], True) for w in ch]  # playbook text is always all-caps
+        raw_start = ch[0]["start"] + offset
+        start = max(0.0, raw_start - lead_in)
+        if ci + 1 < n:
+            end = max(start + 0.02, chunks[ci + 1][0]["start"] + offset - lead_in)
+        else:
+            end = ch[-1]["end"] + offset + 0.3
+        mid = (ch[0]["start"] + ch[-1]["end"]) / 2 + offset
+        ccy = cy_default
+        for ov in overrides:
+            if ov["start"] <= mid < ov["end"]:
+                ccy = ov["cy"]
+                break
+        tw = fontmetrics.text_width(" ".join(texts), font, size, spacing)
+        cx = width / 2
+        x0, x1 = cx - tw / 2 - pad_x, cx + tw / 2 + pad_x
+        y0, y1 = ccy - size * 0.62 - pad_y, ccy + size * 0.62 + pad_y
+        xe0, ye0, xe1, ye1 = x0 - edge_w, y0 - edge_w, x1 + edge_w, y1 + edge_w
+        # a chunk spanning an edit join (e.g. the face sitting lower in the next shot)
+        # splits into two events right at the join, instead of jumping mid-shot
+        spans = [(start, end)]
+        for a in anchors:
+            spans = [piece for s, e in spans for piece in ([(s, a), (a, e)] if s < a < e else [(s, e)])]
+        for s, e in spans:
+            if e <= s:
+                continue
+            draw = r"{\pos(0,0)\p1}"
+            body.append(f"Dialogue: 0,{ass_time(s)},{ass_time(e)},BoxEdge,,0,0,0,,{draw}"
+                        f"{_rounded_rect(xe0, ye0, xe1, ye1, radius + edge_w)}" + r"{\p0}")
+            body.append(f"Dialogue: 1,{ass_time(s)},{ass_time(e)},Box,,0,0,0,,{draw}"
+                        f"{_rounded_rect(x0, y0, x1, y1, radius)}" + r"{\p0}")
+            pos = "{\\pos(%.1f,%.1f)}" % (cx, ccy)
+            colour_tag = f"{{\\c{colours[tags[ci]]}}}" if tags[ci] else ""
+            body.append(f"Dialogue: 2,{ass_time(s)},{ass_time(e)},Cap,,0,0,0,,{pos}{colour_tag}"
+                        + " ".join(texts))
+    return "\n".join(head + body) + "\n"
+
+
 def build_ass(words: list[dict], style: dict, *, width: int, height: int, avoid: list[dict] | None = None,
               offset: float = 0.0, avoid_windows: list[dict] | None = None) -> str:
+    if style.get("style") == "playbook":
+        return build_playbook(words, style, width=width, height=height, offset=offset)
     if style.get("box") == "rounded":
         return build_premium(words, style, width=width, height=height, offset=offset, avoid_windows=avoid_windows)
     base = height if height < width else width  # scale font with the short side

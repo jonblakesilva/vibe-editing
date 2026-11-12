@@ -10,6 +10,7 @@ Stage 3 (verify): FFprobe checks plus a full decode, recorded in a JSON report.
 The original recording is only ever read."""
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import re
@@ -128,6 +129,7 @@ def audio_chain(audio: dict, cut: Path) -> str:
                     "linear=true,")
         else:
             pre += f"loudnorm=I={target}:TP=-1.5:LRA=11,"
+        pre += "alimiter=limit=0.84:level=disabled,"  # final ceiling just under -1.5 dBFS, right after loudnorm
     return pre + "aresample=48000"
 
 
@@ -158,9 +160,42 @@ ZONES = {
 }
 
 
-# Subtle, premium sound for each graphic (no long whooshes or risers).
+def zone_for(graphic: dict) -> set[str]:
+    """Screen zone(s) a graphic occupies: looked up by template for the fixed Remotion
+    templates (ZONES above), or by tier/purpose for a HyperCard, whose zone depends on its
+    props rather than its template name alone. Used both to decide which graphics may
+    overlap in time and (for HyperCard) where it's placed on a vertical output."""
+    if graphic.get("template") == "HyperCard":
+        props = graphic.get("props") or {}
+        if props.get("tier") == "tier1":
+            return {"full"}
+        purpose = props.get("purpose")
+        if purpose == "lower-third":
+            return {"bottom-left"}
+        if purpose in ("label", "definition"):
+            return {"top-right"}
+        if purpose in ("list", "equation"):
+            return {"sides"}
+        return {"full"}  # other HyperCard purposes: the same default as an unknown template
+    return ZONES.get(graphic.get("template"), {"full"})
+
+
+# Subtle, premium sound for each graphic (no long whooshes or risers). Kept defined for
+# backward compatibility; render.finish() now builds its SFX cues from sfx_events() below.
 SFX_FOR = {"LowerThird": "click", "EditorialTitle": "impact", "KineticTitle": "impact", "StatPanels": "tick",
            "FloatingCards": "pop", "Callout": "pop", "CallToAction": "pop", "ChapterCard": "swipe", "EndCard": "success"}
+
+# Never used for an automatic cue: cinematic/sci-fi, not sized for "a thing just happened".
+_BANNED_SFX_CATEGORIES = {"riser", "laser", "zap"}
+# Synthesized files (studio.sfx) are named "<category>_NN.wav" and are soft, <=0.5s -- preferred
+# over the licensed Mixkit library's whoosh/tap/click entries, which run 1.3-1.8s and are cinematic.
+_SYNTH_SFX_RE = re.compile(r"^(whoosh|tap|click|paper|check)_\d+\.wav$", re.IGNORECASE)
+# Section markers / takeovers entering -> whoosh. "EndCard" (or a logo landing) -> tap. Short-lived
+# cards (lower-third/callout) entering -> click; the same templates also get a quiet click leaving.
+_SECTION_IN = {"ChapterCard": "whoosh", "BrandIntro": "whoosh"}
+_END_IN = {"EndCard": "tap"}
+_CARD_IN = {"LowerThird": "click", "Callout": "click"}
+_CARD_OUT = {"LowerThird", "Callout"}
 
 
 def _library(kind: str) -> list[dict]:
@@ -186,6 +221,77 @@ def _sfx_for(template: str) -> dict | None:
     return next((it for it in _library("sfx") if it.get("category") == cat), None)
 
 
+def _sfx_candidates(category: str) -> list[dict]:
+    """Every library entry for `category`, preferring the short synthesized files for
+    whoosh/tap/click when any exist (see _SYNTH_SFX_RE); never a banned category."""
+    if category in _BANNED_SFX_CATEGORIES:
+        return []
+    items = [it for it in _library("sfx") if it.get("category") == category]
+    if category in ("whoosh", "tap", "click"):
+        synth = [it for it in items if _SYNTH_SFX_RE.match(Path(it["path"]).name)]
+        if synth:
+            items = synth
+    return sorted(items, key=lambda it: it["path"])
+
+
+def _pick_sfx_variant(category: str, seed: str) -> dict | None:
+    """Deterministic pick among a category's candidates, keyed by a stable hash of `seed`
+    (same spirit as hyperframes.pick_card), so repeats of the same cue vary by graphic id."""
+    items = _sfx_candidates(category)
+    if not items:
+        return None
+    digest = hashlib.sha1(f"sfx:{category}:{seed}".encode()).hexdigest()
+    return items[int(digest, 16) % len(items)]
+
+
+def _hypercard_sfx_category(props: dict) -> str:
+    if props.get("tier") == "tier1":
+        return "whoosh"
+    purpose = str(props.get("purpose") or "")
+    if purpose in ("checklist", "success") or "check" in purpose:
+        return "check"
+    return "click"
+
+
+def sfx_events(graphics: list[dict], zooms: list[dict]) -> list[dict]:
+    """Sounds follow visible actions only, never every cut (Nate Herk's playbook): one cue per
+    thing that actually happens on screen -- a card entering or leaving, a punch-in zoom, a
+    checklist/success card landing -- not one per template and never a cut. Pure and
+    unit-testable: render.finish() turns the result into actual ffmpeg inputs."""
+    events = []
+    for g in graphics or []:
+        if not g.get("enabled", True):
+            continue
+        template = g.get("template", "")
+        props = g.get("props") or {}
+        start = float(g.get("start", 0.0))
+        duration = float(g.get("duration", 0.0))
+        seed = str(g.get("id", template))
+        if template == "HyperCard":
+            cat_in = _hypercard_sfx_category(props)
+        else:
+            cat_in = _SECTION_IN.get(template) or _END_IN.get(template) or _CARD_IN.get(template)
+        if cat_in:
+            hit = _pick_sfx_variant(cat_in, seed)
+            if hit:
+                events.append({"t": start, "category": cat_in, "file": hit["path"], "gain_db": 0.0})
+        card_out = template in _CARD_OUT or (template == "HyperCard" and cat_in == "click")
+        if card_out and duration > 0:
+            hit = _pick_sfx_variant("click", f"{seed}:out")
+            if hit:
+                events.append({"t": start + duration, "category": "click", "file": hit["path"], "gain_db": -6.0})
+    for z in zooms or []:
+        if not z.get("enabled", True):
+            continue
+        if z.get("kind") == "punch":
+            seed = str(z.get("id") or f"{z.get('start')}:{z.get('end')}")
+            hit = _pick_sfx_variant("whoosh", seed)
+            if hit:
+                events.append({"t": float(z.get("start", 0.0)), "category": "whoosh", "file": hit["path"],
+                               "gain_db": -6.0})
+    return events
+
+
 def zoom_filter(z_expr: str, fx: float, fy: float, fps: float) -> str:
     """Sub-pixel smooth zoom: the perspective filter samples a shrinking window with bicubic
     interpolation every frame, so slow pushes glide instead of stepping whole pixels
@@ -200,13 +306,23 @@ def zoom_filter(z_expr: str, fx: float, fy: float, fps: float) -> str:
 
 def graphics_for_output(plan: dict, tl: Timeline, out_spec: dict, motion_dir: Path, *,
                         clip_window: tuple[float, float] | None = None, face_x: float | None = None,
-                        face_w: float | None = None) -> list[dict]:
-    """Rendered overlay files for this output's resolution, timed on the edited timeline."""
+                        face_w: float | None = None, notes: list | None = None) -> list[dict]:
+    """Rendered overlay files for this output's resolution, timed on the edited timeline.
+    `notes` (optional): a list to append human-readable notes to, e.g. a tier1 HyperCard
+    (full-bleed, landscape-only) that doesn't fit this output and was skipped."""
+    from . import hyperframes as hf
     from . import motion
     items = []
     for g in plan.get("graphics", []):
         if not g.get("enabled", True):
             continue
+        if g.get("template") == "HyperCard":
+            tier = (g.get("props") or {}).get("tier", "tier2")
+            if not hf.tier_allowed(tier, out_spec["width"], out_spec["height"]):
+                if notes is not None:
+                    notes.append(f"{g.get('id', 'graphic')}: {tier} HyperCard skipped on "
+                                 f"{out_spec['width']}x{out_spec['height']} output (doesn't fit a vertical frame).")
+                continue
         start = tl.to_edit_nearest(g["start"])
         if clip_window and not (clip_window[0] <= start < clip_window[1]):
             continue
@@ -221,9 +337,9 @@ def graphics_for_output(plan: dict, tl: Timeline, out_spec: dict, motion_dir: Pa
     # staggered so each reads on its own; graphics in different zones may overlap in time.
     items.sort(key=lambda g: g["start"])
     for i, cur in enumerate(items):
-        zc = ZONES.get(cur["template"], {"full"})
+        zc = zone_for(cur)
         for prev in items[:i]:
-            zp = ZONES.get(prev["template"], {"full"})
+            zp = zone_for(prev)
             if "full" in zc or "full" in zp or zc & zp:
                 end = prev["start"] + prev["duration"]
                 if cur["start"] < end + 0.3 and cur["start"] + cur["duration"] > prev["start"]:
@@ -280,6 +396,35 @@ def archive_previous(out_path: Path, note: dict | None = None) -> int | None:
     return n
 
 
+def _map_faces(faces: list[dict] | None, keys: list[tuple[float, float]], crop_w: int, src_w: int, src_h: int,
+               W: int, H: int, *, fg_h: int | None = None, top: int = 0) -> list[dict]:
+    """Source-normalized faces -> output-normalized faces for a moving horizontal crop
+    (camera_path keys, crop_x in source pixels) scaled to W wide. With fg_h/top the cropped
+    picture is a band of height fg_h placed `top` px down (zoomed-out vertical); otherwise
+    it fills the full output height."""
+    if not faces:
+        return []
+    ts = [k[0] for k in keys]
+
+    def x_at(t: float) -> float:
+        if len(keys) == 1 or t <= ts[0]:
+            return keys[0][1]
+        if t >= ts[-1]:
+            return keys[-1][1]
+        i = bisect.bisect_right(ts, t) - 1
+        (t0, x0), (t1, x1) = keys[i], keys[i + 1]
+        return x0 + (x1 - x0) * (t - t0) / (t1 - t0) if t1 > t0 else x0
+
+    sx = W / crop_w
+    band_h = fg_h if fg_h else H
+    out = []
+    for f in faces:
+        cx = (f["cx"] * src_w - x_at(f["t"])) * sx / W
+        cy = (top + f["cy"] * band_h) / H
+        out.append({**f, "cx": cx, "cy": cy, "w": f["w"] * src_w * sx / W, "h": f["h"] * band_h / H})
+    return out
+
+
 def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dict, out_path: Path,
            work: Path, *, quality: str = "final", burn_captions: bool | None = None,
            graphics: list[dict] | None = None, faces: list[dict] | None = None,
@@ -297,6 +442,7 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
     face_sum = reframe.summarize(faces or [])
     mode = (plan.get("reframe") or {}).get("mode", "auto")
     people = reframe.two_people(faces or []) if (mode in ("auto", "split") and out_aspect < 0.8) else None
+    out_faces = list(faces or [])  # faces in OUTPUT coordinates (for QA), updated by the crops below
     # 1) aspect: interview split, smart crop around the speaker, or plain center crop
     if people:
         filters.append(reframe.split_filter(v, people, src_w=info.width, src_h=info.height, out_w=W, out_h=H) + "[vc]")
@@ -320,6 +466,7 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
                        f"boxblur=10:3,scale={W}:{H},eq=brightness=-0.12:saturation=0.85[zb]")
         filters.append(f"[zb][zf]overlay=x=0:y={top}[vc]")
         v = "[vc]"
+        out_faces = _map_faces(faces, keys, crop_w, info.width, info.height, W, H, fg_h=fg_h, top=top)
         out_aspect = src_aspect  # downstream: picture already composed at W x H
     elif abs(out_aspect - src_aspect) > 0.01:
         if out_aspect < src_aspect:
@@ -327,6 +474,7 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
             keys = reframe.camera_path(faces if mode != "center" else [], info.duration, src_w=info.width, src_h=info.height,
                                        out_aspect=out_aspect)
             filters.append(f"{v}crop=w={crop_w}:h={info.height}:x='{reframe.crop_x_expr(keys)}':y=0[vc]")
+            out_faces = _map_faces(faces, keys, crop_w, info.width, info.height, W, H)
         else:
             crop_h = int(round(info.width / out_aspect / 2) * 2)
             cy = (face_sum["cy"] if face_sum else 0.45) * info.height
@@ -363,14 +511,48 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
         idx += 1
     # 4) motion graphics overlays (transparent renders). "behind" graphics are composited
     #    after this pass, between the background and the speaker (see mask.py).
+    from . import hyperframes as hf
     from . import mask as mask_mod
+    notes = []
+    # a tier1 HyperCard (full-bleed, landscape-only) that still made it into `graphics` (e.g. a
+    # caller that didn't go through graphics_for_output's own filtering) is dropped here too,
+    # with a note -- it never gets a vertical-safe placement the way tier2 does below.
+    dropped_tier1 = [g for g in graphics or [] if g.get("template") == "HyperCard"
+                     and not hf.tier_allowed((g.get("props") or {}).get("tier", "tier2"), W, H)]
+    for g in dropped_tier1:
+        notes.append(f"{g.get('id', 'graphic')}: tier1 HyperCard skipped on {W}x{H} output "
+                     "(doesn't fit a vertical frame).")
     # vertical frames have no room beside the speaker: "behind" graphics go in front there
     behind = [g for g in graphics or [] if g.get("placement") == "behind" and mask_mod.available() and W > H]
-    for g in [g for g in graphics or [] if g not in behind]:
+    for g in [g for g in graphics or [] if g not in behind and g not in dropped_tier1]:
         inputs += ["-i", str(g["path"])]
         st = g["start"]
-        filters.append(f"[{idx}:v]setpts=PTS-STARTPTS+{st:.3f}/TB,scale={W}:{H}[g{idx}]")
-        filters.append(f"{v}[g{idx}]overlay=enable='between(t,{st:.3f},{st + g['duration']:.3f})':eof_action=pass:format=auto[vg{idx}]")
+        sw, sh, ox, oy = W, H, 0, 0
+        crop = ""
+        if g.get("template") == "HyperCard" and H > W:
+            # the card is always rendered at its native 1920x1080; on a vertical output it's
+            # placed in a safe zone instead of being stretched to fill the (very different
+            # aspect) frame. Shrinking the whole 16:9 frame to phone width made a lower-third
+            # tiny, so crop to the part of the frame the card lives in first, then scale that.
+            zone = zone_for(g)
+            if zone == {"bottom-left"}:
+                cw, ch, cx, cy = 720, 405, 0, 675      # lower-third area -> ~1.5x on 1080 wide
+            elif zone == {"top-right"}:
+                cw, ch, cx, cy = 960, 540, 960, 0      # label/definition corner -> ~1.1x
+            else:
+                cw, ch, cx, cy = 1920, 1080, 0, 0      # list/equation/other: whole frame
+            if cw < 1920:
+                crop = f"crop={cw}:{ch}:{cx}:{cy},"
+            sw = W
+            sh = int(round(W * ch / cw / 2) * 2)
+            if zone == {"bottom-left"}:  # lower-third: just above the caption band
+                cap_top = cap_mod.caption_band(W, H, plan.get("captions") or {})["top"]
+                oy = int(max(H * 0.08, min(cap_top - sh - H * 0.015, H - sh)))
+            else:  # label/definition/list/equation/other: top safe zone
+                oy = int(H * 0.08)
+        filters.append(f"[{idx}:v]setpts=PTS-STARTPTS+{st:.3f}/TB,{crop}scale={sw}:{sh}[g{idx}]")
+        filters.append(f"{v}[g{idx}]overlay=x={ox}:y={oy}:enable='between(t,{st:.3f},{st + g['duration']:.3f})':"
+                       f"eof_action=pass:format=auto[vg{idx}]")
         v = f"[vg{idx}]"
         idx += 1
     # 4b) logo bug: small brand mark in the top corner for the whole video
@@ -398,6 +580,7 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
             idx += 1
     # 5) captions
     cap_info = None
+    playbook_boxes = None  # playbook-style caption boxes, for the post-render contrast check
     style = dict(plan["captions"])
     if people and style.get("position", "auto") == "auto":
         style["position"] = "middle"  # on the seam between the two people, never over a face
@@ -415,8 +598,30 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
                 pr = g.get("props", {})
                 est = 0.06 + 0.012 + 1.12 * max(len(pr.get("name", "")) * 0.0145, len(pr.get("title", "")) * 0.0095) + 0.035
                 windows.append({"start": g["start"], "end": g["start"] + g["duration"], "x_right": min(0.45, est)})
+        if style.get("style") == "playbook" and faces:
+            # the playbook box is fixed-size and can't dodge a face the way other styles'
+            # avoid/split logic does, so move it to the top (seam/shoulder area, never
+            # over the mouth) for whatever stretch of the clip the tracked face sits low
+            # enough that the default band would cover the speaker's mouth
+            from . import qa as qa_mod
+            band_default = cap_mod.caption_band(W, H, style)
+            band_top = cap_mod.caption_band(W, H, dict(style, position="top"))
+            fs = sorted(faces, key=lambda f: f["t"])
+            overrides = []
+            for i, f in enumerate(fs):
+                seg_start = 0.0 if i == 0 else (fs[i - 1]["t"] + f["t"]) / 2
+                seg_end = info.duration if i == len(fs) - 1 else (f["t"] + fs[i + 1]["t"]) / 2
+                mouth_top = (f["cy"] - f["h"] / 2 + f["h"] * (1 - qa_mod.MOUTH_LOWER_FRAC)) * H
+                mouth_bottom = (f["cy"] + f["h"] / 2 + f["h"] * qa_mod.MOUTH_EXTEND_FRAC) * H
+                if mouth_top < band_default["bottom"] and mouth_bottom > band_default["top"]:
+                    overrides.append({"start": seg_start, "end": seg_end, "cy": band_top["cy"]})
+            if overrides:
+                style["position_overrides"] = overrides
         cap_info = cap_mod.write_all(words, style, out_path.parent, stem, width=W, height=H, avoid=avoid,
                                      avoid_windows=windows)
+        if style.get("style") == "playbook":
+            from . import qa as qa_mod
+            playbook_boxes = qa_mod.caption_boxes(words, style, W, H)
         if do_caps:
             ass_local = work / f"{stem}.ass"
             ass_local.write_text(Path(cap_info["ass"]).read_text(encoding="utf-8"), encoding="utf-8")
@@ -431,14 +636,20 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
     music = audio.get("music")
     mix = []
     if music and Path(music.get("path", "")).exists():
-        # loudness-matched bed: `bed_db` below the voice (default 14 dB), ducked further while you talk
+        # loudness-matched bed: bed_db (or the older volume_db) below the voice, default -11,
+        # clamped to [-14, -9]; ducked further while you talk (sidechain, below).
         lufs = music.get("lufs") or _library_lufs(music["path"]) or -12.0
-        gain = target + float(music.get("bed_db", -14)) - float(lufs)
+        bed_db = music.get("bed_db", music.get("volume_db", -11))
+        bed_db = max(-14.0, min(-9.0, float(bed_db)))
+        gain = target + bed_db - float(lufs)
         inputs += ["-stream_loop", "-1", "-i", music["path"]]
         filters.append(f"[0:a]{achain},asplit=2[voice][sc]")
         fade_out = max(0.0, info.duration - 2.5)
-        filters.append(f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,volume={gain:.2f}dB,atrim=0:{info.duration:.3f},"
-                       f"afade=t=in:d=1.2,afade=t=out:st={fade_out:.2f}:d=2.5[mus]")
+        # first 1.5s at half gain, ramping to full -- softer than a hard fade-in off silence;
+        # only a tail fade (music only, never the voice) trims the very end.
+        filters.append(f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,volume={gain:.2f}dB,"
+                       f"volume='min(1,0.5+0.5*t/1.5)':eval=frame,atrim=0:{info.duration:.3f},"
+                       f"afade=t=out:st={fade_out:.2f}:d=2.5[mus]")
         filters.append("[mus][sc]sidechaincompress=threshold=0.03:ratio=6:attack=30:release=500[duck]")
         mix += ["[voice]", "[duck]"]
         idx += 1
@@ -448,21 +659,26 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
     sfx_cfg = audio.get("sfx") or {}
     if sfx_cfg.get("enabled"):
         level = float(sfx_cfg.get("level_db", -18))  # relative to the voice
-        for n, g in enumerate(graphics or []):
-            hit = _sfx_for(g.get("template", ""))
-            if not hit:
-                continue
-            inputs += ["-i", hit["path"]]
-            gain = target + level - float(hit.get("lufs") or -14)
-            ms = int(max(0.0, g["start"]) * 1000)
+        sfx_by_path = {it["path"]: it for it in _library("sfx")}
+        for n, ev in enumerate(sfx_events(graphics or [], zooms)):
+            lufs = sfx_by_path.get(ev["file"], {}).get("lufs")
+            inputs += ["-i", ev["file"]]
+            gain = target + level + float(ev.get("gain_db", 0.0)) - float(lufs if lufs is not None else -14)
+            ms = int(max(0.0, ev["t"]) * 1000)
             filters.append(f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,volume={gain:.2f}dB,"
                            f"atrim=0:1.6,adelay={ms}|{ms}[sfx{n}]")
             mix.append(f"[sfx{n}]")
             idx += 1
+    # Master the FINAL stereo mix (voice + music + sfx), not just the voice: the playbook targets
+    # -14 LUFS / true peak <= -1.5 dBTP on the delivered file. loudnorm's true-peak limiter is
+    # oversampled; aim at -2.0 so AAC encoding overshoot still lands under -1.5. alimiter with
+    # level=disabled is a plain safety ceiling (its default auto-level would boost the mix).
+    master = (f"aformat=channel_layouts=stereo,loudnorm=I={target}:TP=-2.0:LRA=11,aresample=48000,"
+              f"alimiter=limit=0.79:level=disabled,apad[aout]")  # apad + -t: audio always as long as the picture
     if len(mix) == 1:
-        filters.append(f"{mix[0]}alimiter=limit=0.95,apad[aout]")  # apad + -t: audio always as long as the picture
+        filters.append(f"{mix[0]}{master}")
     else:
-        filters.append(f"{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0,alimiter=limit=0.95,apad[aout]")
+        filters.append(f"{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0,{master}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_name(out_path.stem + ".part.mp4")
     script = work / f"{stem}.filter.txt"
@@ -474,7 +690,6 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
                      on_progress=(lambda p: progress("finish", p)) if progress else None)
     archive_previous(out_path, {"plan_version": plan.get("version")})
     tmp.replace(out_path)
-    notes = []
     if behind:
         if progress:
             progress("subject mask", 0.0)
@@ -485,10 +700,35 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
         notes.append("Subject masking unavailable (mediapipe not installed): 'behind' graphics were placed in front.")
     if people:
         notes.append("Two people detected: vertical version uses a stacked interview layout.")
-    return {"captions": cap_info, "width": W, "height": H, "notes": notes, "behind": len(behind)}
+    contrast_issues = None
+    if playbook_boxes is not None:
+        from . import qa as qa_mod
+        contrast_issues = qa_mod.check_contrast(out_path, playbook_boxes, samples=40)
+    return {"captions": cap_info, "width": W, "height": H, "notes": notes, "behind": len(behind),
+            "contrast_issues": contrast_issues, "out_faces": out_faces}
 
 
 # ---------------------------------------------------------------- stage 3
+
+def measure_final_loudness(path: Path) -> dict:
+    """Single-pass loudness measurement of the FINAL encoded (stereo) output, for the report's
+    'loudness' field. A warning only -- never folded into `checks`/`ok` above."""
+    out = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostdin", "-i", str(path), "-af", "loudnorm=print_format=json",
+         "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", out.stderr, flags=re.S)
+    if m:
+        try:
+            data = json.loads(m.group(0))
+            lufs, tp = float(data["input_i"]), float(data["input_tp"])
+        except (TypeError, ValueError, KeyError):
+            lufs = tp = None
+    else:
+        lufs = tp = None
+    ok = lufs is not None and tp is not None and -15.0 <= lufs <= -13.0 and tp <= -1.4
+    return {"lufs": lufs, "tp": tp, "ok": ok}
+
 
 def verify(path: Path, *, expect_w: int, expect_h: int, expect_dur: float | None = None,
            full_decode: bool = True) -> dict:
@@ -513,4 +753,5 @@ def verify(path: Path, *, expect_w: int, expect_h: int, expect_dur: float | None
             if s > 0.3 and e < info.duration - 0.3]
     return {"path": str(path), "ok": all(checks.values()), "checks": checks, "silent_gaps": gaps,
             "video_duration": round(vd, 3), "audio_duration": round(ad, 3),
-            "width": info.width, "height": info.height, "size_mb": round(info.size_bytes / 1e6, 2)}
+            "width": info.width, "height": info.height, "size_mb": round(info.size_bytes / 1e6, 2),
+            "loudness": measure_final_loudness(path)}

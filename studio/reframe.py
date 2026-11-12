@@ -15,41 +15,60 @@ from . import config, media
 
 
 def track_faces(src: str | Path, *, start: float = 0.0, duration: float | None = None,
-                sample_fps: float = 2.0, width: int = 640) -> list[dict]:
-    """Returns [{t, cx, cy, w, h, score}] in normalized 0..1 coordinates (t relative to start)."""
+                sample_fps: float = 2.0, width: int = 640, times: list[float] | None = None) -> list[dict]:
+    """Returns [{t, cx, cy, w, h, score}] in normalized 0..1 coordinates (t relative to start,
+    unless `times` is given). Pass `times` (absolute source-video seconds) to sample exact
+    moments instead of a fixed rate, e.g. the first couple of seconds plus every cut point for
+    the B4 mouth check - each is a separate ffmpeg seek, so keep the list short."""
     import cv2
     info = media.probe(src)
     if not info.has_video:
         return []
     h = int(round(width * info.height / info.width / 2) * 2)
+    if not config.YUNET_MODEL.exists():
+        return []
+    det = cv2.FaceDetectorYN.create(str(config.YUNET_MODEL), "", (width, h), 0.6, 0.3, 50)
+    frame_bytes = width * h * 3
+
+    def _detect(frame: np.ndarray) -> dict | None:
+        _, faces = det.detect(frame)
+        if faces is None or not len(faces):
+            return None
+        f = max(faces, key=lambda r: r[2] * r[3])  # largest face = main speaker
+        x, y, fw, fh, score = float(f[0]), float(f[1]), float(f[2]), float(f[3]), float(f[-1])
+        return {"cx": (x + fw / 2) / width, "cy": (y + fh / 2) / h, "w": fw / width, "h": fh / h,
+                "score": round(score, 3),
+                "all": [[round((float(r[0]) + float(r[2]) / 2) / width, 4),
+                         round((float(r[1]) + float(r[3]) / 2) / h, 4),
+                         round(float(r[2]) / width, 4), round(float(r[3]) / h, 4)]
+                        for r in faces if float(r[2]) * float(r[3]) > 0.25 * fw * fh]}
+
+    if times is not None:
+        out = []
+        for t in times:
+            args = ["ffmpeg", "-hide_banner", "-nostdin", "-v", "error", "-ss", f"{max(0.0, t):.3f}", "-i", str(src),
+                    "-frames:v", "1", "-vf", f"scale={width}:{h}", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
+            r = subprocess.run(args, stdout=subprocess.PIPE)
+            if len(r.stdout) < frame_bytes:
+                continue
+            d = _detect(np.frombuffer(r.stdout[:frame_bytes], np.uint8).reshape(h, width, 3))
+            if d:
+                out.append({"t": round(t, 3), **d})
+        return out
     args = ["ffmpeg", "-hide_banner", "-nostdin", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src)]
     if duration:
         args += ["-t", f"{duration:.3f}"]
     args += ["-vf", f"fps={sample_fps},scale={width}:{h}", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
-    if not config.YUNET_MODEL.exists():
-        return []
-    det = cv2.FaceDetectorYN.create(str(config.YUNET_MODEL), "", (width, h), 0.6, 0.3, 50)
     proc = subprocess.Popen(args, stdout=subprocess.PIPE)
-    frame_bytes = width * h * 3
     out, i = [], 0
     try:
         while True:
             buf = proc.stdout.read(frame_bytes)  # type: ignore[union-attr]
             if len(buf) < frame_bytes:
                 break
-            frame = np.frombuffer(buf, np.uint8).reshape(h, width, 3)
-            _, faces = det.detect(frame)
-            t = i / sample_fps
-            if faces is not None and len(faces):
-                # largest face = main speaker
-                f = max(faces, key=lambda r: r[2] * r[3])
-                x, y, fw, fh, score = float(f[0]), float(f[1]), float(f[2]), float(f[3]), float(f[-1])
-                out.append({"t": round(t, 3), "cx": (x + fw / 2) / width, "cy": (y + fh / 2) / h,
-                            "w": fw / width, "h": fh / h, "score": round(score, 3),
-                            "all": [[round((float(r[0]) + float(r[2]) / 2) / width, 4),
-                                     round((float(r[1]) + float(r[3]) / 2) / h, 4),
-                                     round(float(r[2]) / width, 4), round(float(r[3]) / h, 4)]
-                                    for r in faces if float(r[2]) * float(r[3]) > 0.25 * fw * fh]})
+            d = _detect(np.frombuffer(buf, np.uint8).reshape(h, width, 3))
+            if d:
+                out.append({"t": round(i / sample_fps, 3), **d})
             i += 1
     finally:
         proc.stdout.close()  # type: ignore[union-attr]

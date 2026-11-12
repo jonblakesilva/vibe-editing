@@ -158,6 +158,51 @@ Venture, Booked Solid, Integrity Commercial Solutions). Add `vocabulary` (names,
 `studio thumbnail <project> --title "See Your Website Before You Buy" --highlight WEBSITE` writes 3 options
 to `exports/thumbnails/thumbnail_N.jpg` (1280x720). Each option uses a different sharp full-camera frame, cuts you out, and puts the title in the brand font on navy. Keep titles to 3-6 words. Highlight one word.
 
+## HyperFrames card engine
+Branded motion cards with text fill: `studio card add <project> --type <card-type> --text "..." [--at <source-seconds>]`.
+
+Tier-1 cards (full-bleed landscape): overview, section header, stat display. Tier-2 cards (overlay-safe):
+lower-third labels. Card library in `studio/motion/hyperframes/library/`; rendered to transparent ProRes MOV,
+cached by content key. Uses brand colors and fonts. Never edit vendored cards; the pipeline stages copies.
+`studio cards list [--tier tier1 --purpose lower-third]` shows available cards and their text slots.
+Revision phrase: `add a lower third card saying "Jonathan Blake"`.
+
+## Playbook cut rules
+- **Fillers only with guarding silence:** a filler (um, uh, like, just, you know) is cut only if ≥0.1 seconds of silence
+  sits before and after it (`filler_guard`). Protects stammers that feel natural.
+- **Cut pad:** 60 ms decay fade at every cut start, written to new plans only. Old plans render unchanged.
+
+## QA checks
+Every rendered video gets checked: every word at joins (no syllable clipping), mouth position at the start of each shot
+and first 2.5 seconds (no caption overlap), caption contrast, final loudness (warning if under -18 LUFS, not a failure).
+Output: QA sheet (exports/qa/*_sheet.jpg) with flagged frames highlighted. The report lists issues; loudness is informational.
+
+## Caption style "playbook"
+Dark box with light edge, 1–3 word chunks, ALL CAPS, red/green/teal on 25–45% of chunks, hard swaps at cut points,
+2-frame lead-in, chunks split at shots, automatically moves off the mouth. Applied to new plans by default; set with
+`studio set <project> captions.style '"playbook"'`.
+
+## Shorts pace "playbook"
+Tighter, punchier defaults: speech starts ≤0.1 s, phrase gaps ≤0.2 s, 0.2–0.4 s beats kept after commas and list words,
+punch-ins at 0.6–1.0 s and on 5–15% of the Short. Default for new plans; old plans use "natural" pace.
+
+## Music
+Licensed Mixkit library at `~/VibeStudio/music` with mood tags, BPM, duration, LUFS.
+`studio music status` shows what's available. Add to a plan with `studio plan <project> --music-mood confident|chill`.
+Bed volume is -11 dB (brand override to -16 if in brand settings). Per-brand opt-in; check brand configuration.
+
+## SFX
+Five synthesized categories (whoosh, tap, click, paper, check), 4 variants each, 48 kHz stereo. Sounds only on visible actions,
+never science-fiction or riser effects. Lives alongside Mixkit at `~/VibeStudio/sfx/manifest.json`.
+`studio sfx generate` rebuilds all variants deterministically. Mixing is merged into the audio pipeline.
+
+## Thumbnails
+YouTube thumbnails (1280×720) or Shorts covers (1080×1920) with face detection (BiRefNet + rembg), seven proof-driven layouts:
+face-number, payment, checklist, screenshot, two-person, clean-white, shorts-cover.
+`studio thumbnail <project> --layout face-number --item "Website" --amount "$47" --chip maps_pin` outputs to exports/thumbnails/.
+Layouts match the owner's reference style (edge-cropped face, one highlight box, proof element). Titles and numbers are always
+the user's words, never invented.
+
 ## Posting through GoHighLevel (only after the user approves each post)
 - Account ids, posting times (09:00 / 12:30 / 18:30 ET) and the default status live in
   `~/Instagram Bot/config/studio.json` (Content Studio). Use them; Shorts go to The Lead Venture YouTube,
@@ -173,4 +218,20 @@ to `exports/thumbnails/thumbnail_N.jpg` (1280x720). Each option uses a different
   anything. Default to `status: "draft"` unless they asked for it to be scheduled. Never publish
   previews, only final renders. Captions follow the brand's proof-and-claims rules (numbers from the
   knowledge base or the transcript only; include "Results vary" on result claims).
+
+## Notes → rules
+
+When the owner gives a note, fix the issue, add a row here, and add a test that enforces it.
+
+| Owner note | Rule enforced | File |
+|---|---|---|
+| "subtitles covering my face in split screen" | Captions positioned to avoid seams in split layouts | captions.py (split_windows) |
+| "studio sound" | Default denoise is "studio" chain | render.py (DENOISE_CHAIN) |
+| "screenshots bigger, face in corner" | Screencam frames are enlarged, face stays in corner | compose.py (screencam layout) |
+| "lower third on my face" | LowerThird vertical position is top 16.5% of frame | LowerThird.tsx (top positioning) |
+| "subtitles on my face, move up" | Mouth check + playbook positioning keeps captions clear | qa.py (mouth:) + captions.py |
+| "thumbnail cut-out blurry" | BiRefNet face segmentation + edge crop | thumbnail.py (rembg + face crop) |
+| "thumbnails look horrible / reference style" | Seven proof-driven layouts added | thumbnail.py (LAYOUTS) |
+| "teleprompter doesn't start" | Content Studio dashboard connectivity | (external service fix) |
+| "no pop-ups in the UI" | Inline UI, no prompt/confirm/alert modals | web/ (Frame.io style review) |
 

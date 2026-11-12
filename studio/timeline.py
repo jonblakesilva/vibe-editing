@@ -37,6 +37,29 @@ def keep_segments(duration: float, cuts: list[dict], *, fps: float = 30.0, min_k
     return out
 
 
+SILENCE_CUT_TYPES = {"pause", "dead_air"}
+
+
+def pad_cut_starts(cuts: list[dict], pad: float) -> list[dict]:
+    """Delay the start of each non-silence cut by `pad` seconds. Transcripts end words
+    40-80ms before the consonant actually dies, so cutting exactly at the transcript's
+    word boundary clips the tail of the kept word; nudging the cut's start later lets that
+    decay survive. Pause/dead_air cuts already start in silence, so they're left alone.
+    The padded start never leaves the cut's own [start, end] span (still inside the
+    silence/removed region), and a cut shrunk below 0.05s by the pad is left unpadded."""
+    out = []
+    for c in cuts:
+        if c.get("type") in SILENCE_CUT_TYPES:
+            out.append(c)
+            continue
+        new_start = round(c["start"] + pad, 6)
+        if c["end"] - new_start >= 0.05:
+            out.append({**c, "start": new_start})
+        else:
+            out.append(c)
+    return out
+
+
 class Timeline:
     """Maps times in the original recording to times in the edited video."""
 

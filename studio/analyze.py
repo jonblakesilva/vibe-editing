@@ -37,6 +37,25 @@ VIDEO_TYPE_KEYWORDS = {
     "promo": ["introducing", "launch", "new", "available now", "announcing", "coming soon"],
     "interview": ["question", "tell us", "what do you think", "your experience", "welcome to the show"],
 }
+# "playbook" pace (Nate Herk's measured house reel style): a word ending in "," or one of
+# these list markers starts a "natural beat" - a short pause there is left alone rather than
+# squeezed to the usual tight gap (see find_pauses's beat_max/beat_keep).
+LIST_MARKERS = {"first", "second", "third", "next", "then", "finally", "one", "two", "three", "number"}
+NUMBER_WORDS = {"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven",
+                "twelve", "dozen", "hundred", "thousand", "million", "billion", "first", "second", "third"}
+# Common long function/filler words that shouldn't count as a "charged" punch-in word just
+# because they clear the 6-letter bar.
+STOPWORDS = {
+    "about", "after", "again", "against", "almost", "although", "always", "among", "another", "anyone",
+    "anything", "around", "because", "before", "being", "between", "could", "didn't", "does", "doesn't",
+    "doing", "during", "either", "enough", "every", "everyone", "everything", "going", "haven't", "having",
+    "herself", "himself", "however", "itself", "little", "maybe", "might", "mostly", "myself", "neither",
+    "nothing", "obviously", "once", "other", "others", "ourselves", "pretty", "really", "should", "shouldn't",
+    "simply", "since", "someone", "something", "sometimes", "still", "such", "suddenly", "themselves", "there",
+    "therefore", "these", "they're", "things", "think", "those", "though", "through", "today", "totally",
+    "under", "until", "very", "wasn't", "weren't", "whatever", "when", "whether", "which", "while", "whole",
+    "whose", "will", "within", "without", "would", "wouldn't", "yourself", "yourselves",
+}
 
 _PUNCT = re.compile(r"[^\w']+")
 
@@ -67,27 +86,45 @@ def sentences(words: list[dict], *, gap: float = 0.7) -> list[dict]:
     return result
 
 
-def find_pauses(words: list[dict], *, max_pause: float, keep_pause: float) -> list[dict]:
-    """Gaps longer than max_pause are shortened to keep_pause (breathing room stays)."""
+def find_pauses(words: list[dict], *, max_pause: float, keep_pause: float,
+                beat_max: float | None = None, beat_keep: float | None = None) -> list[dict]:
+    """Gaps longer than max_pause are shortened to keep_pause (breathing room stays).
+
+    beat_max/beat_keep (playbook pace only): right after a "natural beat" - a word ending in
+    "," or a list marker like "first"/"next" - gaps up to beat_max are left untouched, and
+    longer ones are shortened to beat_keep instead of keep_pause."""
     cuts = []
     for i in range(1, len(words)):
         gap = words[i]["start"] - words[i - 1]["end"]
-        if gap > max_pause:
-            half = keep_pause / 2
-            cuts.append({"start": round(words[i - 1]["end"] + half, 3), "end": round(words[i]["start"] - half, 3),
-                         "type": "pause", "reason": f"Long pause ({gap:.1f}s) shortened to {keep_pause:.2f}s",
-                         "confidence": 0.95})
+        is_beat = beat_max is not None and (words[i - 1]["word"].rstrip().endswith(",")
+                                            or norm(words[i - 1]["word"]) in LIST_MARKERS)
+        if is_beat:
+            if gap <= beat_max:
+                continue
+            keep = beat_keep
+        elif gap > max_pause:
+            keep = keep_pause
+        else:
+            continue
+        half = keep / 2
+        cuts.append({"start": round(words[i - 1]["end"] + half, 3), "end": round(words[i]["start"] - half, 3),
+                     "type": "pause", "reason": f"Long pause ({gap:.1f}s) shortened to {keep:.2f}s",
+                     "confidence": 0.95})
     return cuts
 
 
-def find_fillers(words: list[dict], *, aggressive: bool = False) -> list[dict]:
+def find_fillers(words: list[dict], *, aggressive: bool = False, filler_guard: bool = False) -> list[dict]:
+    """filler_guard (Nate Herk's rule): a single filler ("um"/"uh") only gets cut cleanly when
+    there is silence (>=0.1s) on both sides; otherwise cutting it clips the neighbouring word,
+    so it's left in the transcript as a disabled, low-confidence cut for the editor to review."""
     cuts = []
     toks = [norm(w["word"]) for w in words]
     i = 0
     while i < len(words):
         t = toks[i]
         matched = 0
-        if t in SINGLE_FILLERS:
+        is_single = t in SINGLE_FILLERS
+        if is_single:
             matched = 1
         else:
             for ph in PHRASE_FILLERS:
@@ -101,9 +138,22 @@ def find_fillers(words: list[dict], *, aggressive: bool = False) -> list[dict]:
                     matched = 1
         if matched:
             s, e = words[i]["start"], words[i + matched - 1]["end"]
-            cuts.append({"start": s, "end": e, "type": "filler",
-                         "reason": f'Filler word "{" ".join(w["word"] for w in words[i:i + matched]).strip(",. ")}"',
-                         "text": " ".join(w["word"] for w in words[i:i + matched]), "confidence": 0.9 if matched and t in SINGLE_FILLERS else 0.6})
+            text = " ".join(w["word"] for w in words[i:i + matched]).strip(",. ")
+            full_text = " ".join(w["word"] for w in words[i:i + matched])
+            if is_single and filler_guard:
+                prev_gap = words[i]["start"] - words[i - 1]["end"] if i else float("inf")
+                next_gap = words[i + 1]["start"] - words[i]["end"] if i + 1 < len(words) else float("inf")
+                if prev_gap >= 0.1 and next_gap >= 0.1:
+                    cuts.append({"start": s, "end": e, "type": "filler", "reason": f'Filler word "{text}"',
+                                 "text": full_text, "confidence": 0.9, "enabled": True})
+                else:
+                    cuts.append({"start": s, "end": e, "type": "filler",
+                                 "reason": f'Filler "{text}" runs into the next word; left in '
+                                           "(cutting it would clip words)",
+                                 "text": full_text, "confidence": 0.4, "enabled": False})
+            else:
+                cuts.append({"start": s, "end": e, "type": "filler", "reason": f'Filler word "{text}"',
+                             "text": full_text, "confidence": 0.9 if is_single else 0.6})
             i += matched
         else:
             i += 1
@@ -300,6 +350,84 @@ def find_cta(sents: list[dict]) -> list[dict]:
             for s in sents if any(p in s["text"].lower() for p in CTA_PHRASES)]
 
 
+def _is_charged(word: str, keywords: list[str] | None = None) -> bool:
+    """A "charged" word for a playbook punch-in: a number, a $ amount, one of the caller's
+    keywords, or a word of >=6 letters that isn't a common stopword."""
+    raw = word.strip()
+    if not raw:
+        return False
+    if "$" in raw or any(ch.isdigit() for ch in raw):
+        return True
+    nw = norm(word)
+    if not nw:
+        return False
+    if nw in NUMBER_WORDS:
+        return True
+    if keywords and nw in {norm(k) for k in keywords}:
+        return True
+    return len(nw) >= 6 and nw not in STOPWORDS
+
+
+def first_punch_in(words: list[dict], keywords: list[str] | None = None) -> dict | None:
+    """Playbook pace: the first punch-in zoom. The first "charged" word (see _is_charged)
+    that starts 0.6-1.0s after the first kept word, or - if none qualify - the word in that
+    window starting nearest 0.8s after it."""
+    if not words:
+        return None
+    base = words[0]["start"]
+    window = [w for w in words[1:] if 0.6 <= w["start"] - base <= 1.0]
+    charged = [w for w in window if _is_charged(w["word"], keywords)]
+    if charged:
+        chosen = charged[0]
+    elif window:
+        chosen = min(window, key=lambda w: abs((w["start"] - base) - 0.8))
+    else:
+        return None
+    return {"time": round(chosen["start"], 3), "scale": 1.12, "word": chosen["word"]}
+
+
+def punch_ins(words: list[dict], duration: float, keywords: list[str] | None = None,
+             *, punch_len: float = 1.6) -> list[dict]:
+    """Playbook pace: the first punch-in plus later ones on charged sentence-initial words,
+    added until 5-15% of `duration` is covered. Each punch lasts about punch_len seconds
+    (1.2-2.0s) and none overlap. Returns zoom-shaped dicts: start, end, scale, word, kind."""
+    if not words or duration <= 0:
+        return []
+    first = first_punch_in(words, keywords)
+    if not first:
+        return []
+    base = words[0]["start"]
+    end_limit = base + duration
+    min_cov, max_cov = 0.05 * duration, 0.15 * duration
+
+    def make(w: dict) -> dict:
+        start = w["start"]
+        end = min(start + punch_len, end_limit)
+        return {"start": round(start, 3), "end": round(end, 3), "scale": 1.12, "word": w["word"], "kind": "punch"}
+
+    first_p = make({"start": first["time"], "word": first["word"]})
+    covered = first_p["end"] - first_p["start"]
+    if covered <= 0:
+        return []
+    punches = [first_p]
+    for s in sentences(words):
+        if covered >= min_cov:
+            break
+        w = words[s["i0"]]
+        if w["start"] <= first_p["start"] + 0.05 or not _is_charged(w["word"], keywords):
+            continue
+        cand = make(w)
+        if cand["end"] - cand["start"] < 0.5:
+            continue
+        if any(not (cand["end"] <= p["start"] or cand["start"] >= p["end"]) for p in punches):
+            continue  # would overlap an existing punch
+        if covered + (cand["end"] - cand["start"]) > max_cov:
+            continue  # would push total coverage past 15%
+        punches.append(cand)
+        covered += cand["end"] - cand["start"]
+    return punches
+
+
 def classify(words: list[dict]) -> dict:
     text = " " + " ".join(norm(w["word"]) for w in words) + " "
     scores = {k: sum(text.count(f" {kw} ") for kw in kws) for k, kws in VIDEO_TYPE_KEYWORDS.items()}
@@ -335,22 +463,30 @@ def merge_cuts(cuts: list[dict], duration: float) -> list[dict]:
 
 
 def analyze(transcript: dict, *, pace: str = "natural", aggressive_fillers: bool = False,
-            duration: float | None = None) -> dict:
+            duration: float | None = None, filler_guard: bool = False) -> dict:
     """duration: length of the media file (may exceed the audio/transcript length)."""
     words = transcript["words"]
     duration = max(duration or 0, transcript["duration"] or (words[-1]["end"] if words else 0))
     sents = sentences(words)
     max_pause, keep_pause = {"relaxed": (1.2, 0.6), "natural": (0.8, 0.4), "tight": (0.5, 0.25),
-                             "shorts": (0.35, 0.15)}.get(pace, (0.8, 0.4))
-    cuts = (find_pauses(words, max_pause=max_pause, keep_pause=keep_pause)
-            + find_fillers(words, aggressive=aggressive_fillers or pace in ("tight", "shorts"))
+                             "shorts": (0.35, 0.15), "playbook": (0.2, 0.15)}.get(pace, (0.8, 0.4))
+    # Playbook pace keeps the natural-beat exception (see find_pauses's beat_max/beat_keep):
+    # a gap right after a comma or list marker ("First,"/"Next"...) up to 0.4s is left alone,
+    # longer ones shortened to 0.35s instead of the usual tight keep_pause.
+    beat_kwargs = {"beat_max": 0.4, "beat_keep": 0.35} if pace == "playbook" else {}
+    cuts = (find_pauses(words, max_pause=max_pause, keep_pause=keep_pause, **beat_kwargs)
+            + find_fillers(words, aggressive=aggressive_fillers or pace in ("tight", "shorts", "playbook"),
+                          filler_guard=filler_guard)
             + find_restarts_and_repeats(words, sents)
             + find_retakes(sents)
             + find_phrase_retakes(words)
             + find_noise_words(words))
-    # Leading/trailing dead air before the first and after the last word.
-    if words and words[0]["start"] > 0.5:
-        cuts.append({"start": 0.0, "end": words[0]["start"] - 0.2, "type": "dead_air",
+    # Leading/trailing dead air before the first and after the last word. Playbook pace wants
+    # speech starting within 0.1s of the clip start instead of the usual 0.2s cushion.
+    lead_pad = 0.1 if pace == "playbook" else 0.2
+    lead_gate = 0.1 if pace == "playbook" else 0.5
+    if words and words[0]["start"] > lead_gate:
+        cuts.append({"start": 0.0, "end": words[0]["start"] - lead_pad, "type": "dead_air",
                      "reason": "Silence before first word", "confidence": 0.95})
     if words and duration - words[-1]["end"] > 0.8:
         cuts.append({"start": words[-1]["end"] + 0.4, "end": duration, "type": "dead_air",

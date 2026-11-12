@@ -13,7 +13,8 @@ from collections import Counter
 from pathlib import Path
 
 from . import analyze as an
-from .timeline import Timeline, keep_segments
+from . import captions
+from .timeline import Timeline, keep_segments, pad_cut_starts
 
 STOPWORDS = set("""a an the and or but so to of in on for with at by from is are was were be been it this that
 these those i you we they he she my your our their me us them not no yes do does did have has had will
@@ -48,6 +49,24 @@ CAPTION_STYLES = {
              "animation": "pop", "desc": "Big punchy pop-in words for high-energy Shorts"},
 }
 
+# PLAYBOOK_STYLE is added to captions.py by a parallel task; guard the lookup so plan.py still
+# imports (and every other caption style still works) if that landed after this module did.
+_playbook_style = getattr(captions, "PLAYBOOK_STYLE", None)
+if _playbook_style:
+    CAPTION_STYLES["playbook"] = dict(_playbook_style)
+
+# HyperFrames card types a plain-English "add a ... card saying ..." request can name, and
+# the (tier, purpose) each one maps to (see hyperframes.py cards()/pick_card()).
+CARD_TYPE_PURPOSE = {
+    "lower third": ("tier2", "lower-third"),
+    "label": ("tier2", "label"),
+    "list": ("tier2", "list"),
+    "definition": ("tier2", "definition"),
+    "section": ("tier1", "section"),
+    "stat": ("tier1", "stat"),
+    "quote": ("tier1", "quote"),
+}
+
 PLATFORM_OUTPUTS = {
     "youtube": {"aspect": "16:9", "width": 1920, "height": 1080},
     "youtube_4k": {"aspect": "16:9", "width": 3840, "height": 2160},
@@ -75,12 +94,48 @@ def topic_keywords(words: list[dict], n: int = 6) -> list[str]:
     return out[:n]
 
 
-def _brand_music(brand: dict) -> dict | None:
+def _brand_music(brand: dict, mood: str | None = None, seed: str = "") -> dict | None:
+    """Pick a licensed bed track for `mood` from the music library (studio/music.py).
+    Music is opt-in: this is only called with a mood when the caller has already decided
+    the brand wants music (options["music_mood"] was given, or the brand enables it) - a
+    brand with music disabled and no explicit mood never reaches here with a mood at all,
+    so it never gets a track. bed_db is how far under the voice the bed sits; the playbook
+    default is -11 dB, overridable per brand (brand.json music.bed_db, or the older
+    music.volume_db field render.py's audio_chain predates)."""
+    if not mood:
+        return None
+    from . import music as music_mod
+    track = music_mod.pick(mood, seed=seed)
+    if not track:
+        return None
     m = brand.get("music") or {}
-    track = m.get("default_track")
-    if m.get("enabled") and track and Path(track).exists():
-        return {"path": track, "bed_db": float(m.get("bed_db", -16))}
-    return None
+    bed_db = float(m.get("bed_db", m.get("volume_db", -11)))
+    return {"path": track["path"], "bed_db": bed_db, "volume_db": bed_db,
+            "lufs": track.get("lufs"), "mood": mood, "title": track.get("title")}
+
+
+def _infer_music_mood(category: str, topic: str) -> str:
+    """"claims/news/results" -> confident; "how-to/method/tutorial" -> chill. Anything else
+    still gets a mood (confident) because this is only called once the brand has already
+    opted into music; it just has no specific cue to go on."""
+    text = f"{category} {topic}".lower()
+    if any(k in text for k in ("how-to", "how to", "method", "tutorial")):
+        return "chill"
+    if any(k in text for k in ("claim", "news", "result")):
+        return "confident"
+    return "confident"
+
+
+def _resolve_music_mood(options: dict, brand: dict, category: str, topic: str) -> str | None:
+    """None means "don't turn music on": no explicit request, and the brand hasn't opted
+    in either. An explicit options["music_mood"] always wins, even for a brand that has
+    music disabled - asking for music is the opt-in."""
+    explicit = options.get("music_mood")
+    if explicit:
+        return explicit
+    if not (brand.get("music") or {}).get("enabled"):
+        return None
+    return _infer_music_mood(category, topic)
 
 
 def default_zooms(analysis: dict, vtype: str, mode: str) -> list[dict]:
@@ -156,7 +211,7 @@ def build(project: dict, transcript: dict, *, brand: dict, mode: str = "longform
     options = options or {}
     pace = options.get("pace") or ("shorts" if mode == "shorts" else brand.get("pace", "natural"))
     analysis = an.analyze(transcript, pace=pace, aggressive_fillers=options.get("aggressive_fillers", False),
-                          duration=project["source"]["duration"])
+                          duration=project["source"]["duration"], filler_guard=True)
     vtype = options.get("video_type") or analysis["classification"]["type"]
     words = transcript["words"]
     keywords = topic_keywords(words)
@@ -173,6 +228,9 @@ def build(project: dict, transcript: dict, *, brand: dict, mode: str = "longform
                 if cap.get("box_color") == "brand" else cap.get("box_color"),
                 "font": brand.get("fonts", {}).get("captions") or cap["font"]})
     title_guess = " ".join(k.title() for k in keywords[:3]) or "Untitled"
+    topic = options.get("topic") or title_guess
+    music_mood = _resolve_music_mood(options, brand, vtype, topic)
+    music = _brand_music(brand, mood=music_mood, seed=project["id"])
     src = project["source"]
     plan = {
         "schema": "vibe-studio.plan/v1",
@@ -186,7 +244,7 @@ def build(project: dict, transcript: dict, *, brand: dict, mode: str = "longform
                    if k in src},
         "summary": {
             "video_type": vtype,
-            "topic": options.get("topic") or title_guess,
+            "topic": topic,
             "keywords": keywords,
             "audience": brand.get("audience") or "",
             "suggested_hook": best,
@@ -206,13 +264,21 @@ def build(project: dict, transcript: dict, *, brand: dict, mode: str = "longform
         "reframe": {"mode": "auto", "vertical_zoom": brand.get("recurring", {}).get("vertical_zoom", "medium")},
         "logo_bug": dict(brand.get("recurring", {}).get("logo_bug") or {"enabled": False}),  # auto | largest | split | center (vertical/square crops)
         "audio": {"clean": True, "denoise": options.get("denoise") or brand.get("denoise") or "studio", "normalize": True, "target_lufs": -14.0,
-                  "music": _brand_music(brand),
+                  "music": music,
                   "sfx": {"enabled": bool(brand.get("recurring", {}).get("sound_effects")), "level_db": -18}},
         "outputs": [dict(PLATFORM_OUTPUTS[o], name=o) for o in (outputs or (
             ["youtube"] if mode == "longform" else ["shorts"]))],
         "sentences": analysis["sentences"],
         "revisions": [],
+        "cut_pad": 0.06,
+        "filler_guard": True,
+        # New plans default to the playbook Shorts pace; plans already on disk keep their own
+        # (pipeline.render_shorts falls back to "shorts" when this key is missing entirely).
+        "shorts_settings": {"pace": "playbook"},
     }
+    if music_mood and not music:
+        plan["summary"]["editor_notes"].append(
+            f"No music track matched mood '{music_mood}' in ~/VibeStudio/music")
     plan["stats"] = stats(plan)
     return plan
 
@@ -240,6 +306,8 @@ def timeline(plan: dict) -> Timeline:
     # keep overrides restore ranges the user wants to keep
     for k in plan.get("keep_overrides", []):
         cuts = _subtract(cuts, k["start"], k["end"])
+    if plan.get("cut_pad"):
+        cuts = pad_cut_starts(cuts, plan["cut_pad"])
     segs = keep_segments(plan["source"]["duration"], cuts, fps=fps)
     if plan["hook"].get("cold_open") and plan["hook"].get("start") is not None:
         segs = [(plan["hook"]["start"], plan["hook"]["end"] + 0.25)] + segs
@@ -319,10 +387,14 @@ def to_markdown(plan: dict) -> str:
     lines += ["", "## Captions", f"- Style: {c['style']} - {c.get('desc', '')}; font {c['font']}, "
               f"size x{c.get('size_scale', 1)}, position {c['position']}, {'on' if c['enabled'] else 'off'}"]
     a = plan["audio"]
+    music_line = ("- Music: none" if not a.get("music") else
+                  f"- Music: {a['music'].get('title') or Path(a['music']['path']).name} at "
+                  f"{a['music'].get('bed_db', a['music'].get('volume_db', -11))} dB under the voice, with ducking")
     lines += ["", "## Audio", f"- Clean-up: {'high-pass + ' + a['denoise'] + ' noise reduction' if a['clean'] else 'off'}",
               f"- Loudness: {a['target_lufs']} LUFS" if a["normalize"] else "- Loudness: unchanged",
-              f"- Music: {a['music']['path']} at {a['music'].get('volume_db', -22)} dB with ducking" if a.get("music")
-              else "- Music: none"]
+              music_line,
+              f"- Caption style: {c['style']}",
+              f"- Shorts pace: {plan.get('shorts_settings', {}).get('pace', 'shorts')}"]
     if plan.get("clips"):
         lines += ["", "## Shorts", "", "| # | From | To | Length | Score | Hook |", "|---|---|---|---|---|---|"]
         for i, cl in enumerate(plan["clips"], 1):
@@ -368,6 +440,7 @@ def revise(plan: dict, ops: list[dict], request: str = "") -> dict:
       {"op":"cut","start":30.0,"end":34.5,"reason":"..."}
       {"op":"add_graphic","template":"KineticTitle","start":2.0,"duration":3,"props":{...},"placement":"behind"}
       {"op":"add_zoom","start":5,"end":8,"scale":1.15}
+      {"op":"add_card","tier":"tier2","purpose":"lower-third","text":"Jonathan Blake","start":4.0}
       {"op":"remove","id":"g_cta1"}
       {"op":"props","id":"g_user4","value":{"layout":"sides"}}   merge graphic props by id
       {"op":"note","text":"..."}"""
@@ -400,8 +473,32 @@ def revise(plan: dict, ops: list[dict], request: str = "") -> dict:
             plan["zooms"].append({"id": f"z{n}u", "start": float(op["start"]), "end": float(op["end"]),
                                   "scale": float(op.get("scale", 1.15)), "kind": op.get("kind", "punch"),
                                   "enabled": True, "reason": "Requested"})
+        elif kind == "add_card":
+            from . import hyperframes as hf
+            card = hf.pick_card(op["tier"], op["purpose"], seed=plan.get("project_id", ""))
+            if not card:
+                plan["summary"]["editor_notes"].append(
+                    f"No HyperFrames card found for {op['purpose']} ({op['tier']}); card not added.")
+            else:
+                slot_names = [s["name"] for s in card["slots"]]
+                slots = {slot_names[0]: op["text"]} if slot_names else {}
+                if op["purpose"] == "lower-third" and len(slot_names) > 1:
+                    title = _brand_lower_third(plan).get("title")
+                    if title:
+                        slots[slot_names[1]] = title
+                lo, hi = card.get("duration_range", (None, None))
+                duration = round(((lo or 3.0) + (hi or lo or 3.0)) / 2, 2) if (lo or hi) else 3.5
+                n = _next_num(plan["graphics"], "g_card")
+                plan["graphics"].append({"id": f"g_card{n}", "template": "HyperCard", "start": float(op["start"]),
+                                         "duration": duration,
+                                         "props": {"card": card["id"], "tier": op["tier"], "purpose": op["purpose"],
+                                                   "slots": slots},
+                                         "placement": "overlay", "enabled": True})
+                for w in hf.check_slot_text(slots, _plan_transcript_text(plan)):
+                    plan["summary"]["editor_notes"].append(f"{card['id']}: {w} - never invent numbers, check the source.")
         elif kind == "pace":  # rebuild every pause cut at a new pace (keeps all other cuts and choices)
-            pace_rules = {"relaxed": (1.2, 0.6), "natural": (0.8, 0.4), "tight": (0.5, 0.22), "snappy": (0.35, 0.15)}
+            pace_rules = {"relaxed": (1.2, 0.6), "natural": (0.8, 0.4), "tight": (0.5, 0.22), "snappy": (0.35, 0.15),
+                         "playbook": (0.2, 0.15)}
             max_p, keep_p = pace_rules.get(op["value"], pace_rules["tight"])
             words = op.get("_words") or []
             plan["cuts"] = [c for c in plan["cuts"] if c["type"] != "pause"]
@@ -439,6 +536,35 @@ def _brand_colors(plan: dict) -> dict:
         return brand_mod.load(plan.get("brand") if plan.get("brand") not in (None, "default") else None)["colors"]
     except FileNotFoundError:
         return {}
+
+
+def _brand_lower_third(plan: dict) -> dict:
+    from . import brand as brand_mod
+    try:
+        br = brand_mod.load(plan.get("brand") if plan.get("brand") not in (None, "default") else None)
+    except FileNotFoundError:
+        return {}
+    return br.get("lower_third") or {}
+
+
+def _quoted_time(plan: dict, quote: str, at: float | None) -> float:
+    """When a plain-English request quotes words for a card, time it to the moment those
+    words are actually spoken if they're in the transcript; otherwise fall back to the
+    current playhead, then the first sentence."""
+    ql = quote.lower()
+    hit = next((s for s in plan.get("sentences") or [] if ql in s.get("text", "").lower()), None)
+    if hit:
+        return hit["start"]
+    if at is not None:
+        return at
+    sents = plan.get("sentences") or []
+    return sents[0]["start"] if sents else 0.0
+
+
+def _plan_transcript_text(plan: dict) -> str:
+    """The closest thing to "the transcript" a plan carries on its own (sentence text with
+    timing, no word-level corrections) - enough for check_slot_text's loose number matching."""
+    return " ".join(s.get("text", "") for s in plan.get("sentences") or [])
 
 
 def _next_num(items: list[dict], prefix: str) -> int:
@@ -497,6 +623,27 @@ def parse_request(plan: dict, text: str, at: float | None = None) -> list[dict]:
         ops.append({"op": "add_graphic", "template": "KineticTitle", "start": at or 0.5, "duration": 3.5,
                     "props": {"text": (m.group(1) or plan["summary"]["topic"]).strip().upper()},
                     "placement": "behind"})
+    card_types = "|".join(re.escape(k) for k in CARD_TYPE_PURPOSE)
+    m = re.search(rf'add a ({card_types}) card saying\s*"([^"]+)"', text, flags=re.I)
+    if m:
+        tier, purpose = CARD_TYPE_PURPOSE[m.group(1).lower()]
+        quote = m.group(2).strip()
+        ops.append({"op": "add_card", "tier": tier, "purpose": purpose, "text": quote,
+                    "start": _quoted_time(plan, quote, at)})
+    mood_words = "confident|chill|claims|method|upbeat|lofi|calm|driving|hiphop|corporate|motivational"
+    m = re.search(rf"\b({mood_words})\s+music\b", t)
+    if m or re.search(r"\badd music\b", t):
+        mood = m.group(1) if m else _infer_music_mood(plan["summary"].get("video_type", ""), plan["summary"].get("topic", ""))
+        from . import music as music_mod
+        track = music_mod.pick(mood, seed=plan.get("project_id", ""))
+        if track:
+            cur = plan.get("audio", {}).get("music") or {}
+            bed_db = float(cur.get("bed_db", cur.get("volume_db", -11)))
+            ops.append({"op": "set", "path": "audio.music",
+                        "value": {"path": track["path"], "bed_db": bed_db, "volume_db": bed_db,
+                                  "lufs": track.get("lufs"), "mood": mood, "title": track.get("title")}})
+        else:
+            ops.append({"op": "note", "text": f"No music track matched mood '{mood}' in ~/VibeStudio/music"})
     if "opening" in t and any(w in t for w in ("exciting", "stronger", "punchier", "better")):
         ops.append({"op": "set", "path": "hook.cold_open", "value": True})
         hook = plan["summary"].get("suggested_hook")

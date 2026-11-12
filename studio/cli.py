@@ -103,7 +103,8 @@ def cmd_thumbnail(a):
     from . import thumbnail
     times = [float(x) for x in a.at.split(",")] if a.at else None
     for p in thumbnail.make(proj_mod.resolve_id(a.project), title=a.title, highlight=a.highlight, times=times,
-                             photos=a.photo):
+                             photos=a.photo, layout=a.layout, items=a.item, amount=a.amount,
+                             photo2=a.photo2, screenshot=a.screenshot, chip=a.chip):
         print(p)
     return 0
 
@@ -208,7 +209,8 @@ def cmd_correct(a):
 def cmd_plan(a):
     from . import pipeline
     opts = {k: v for k, v in {"caption_style": a.caption_style, "pace": a.pace, "video_type": a.type,
-                              "topic": a.topic, "cold_open": a.cold_open or None}.items() if v is not None}
+                              "topic": a.topic, "cold_open": a.cold_open or None,
+                              "music_mood": a.music_mood}.items() if v is not None}
     plan = pipeline.make_plan(a.project, mode=a.mode, outputs=a.outputs.split(",") if a.outputs else None,
                               shorts_count=a.shorts, short_min=a.short_min, short_max=a.short_max,
                               options=opts, progress=_progress_printer())
@@ -276,7 +278,13 @@ def _render(a, quality):
         if r.get("silent_gaps"):
             print(f"      check: silence left at {', '.join(f'{s}s ({d}s long)' for s, d in r['silent_gaps'][:5])}")
         for it in r.get("listen_issues") or []:
+            if it.get("type") == "clipped_word":
+                continue  # printed below, under "words:"
             print(f"      listen: possible {it['type'].replace('_', ' ')} at {it['at']:.1f}s - {it['text'][:70]}")
+        for it in r.get("mouth_issues") or []:
+            print(f"      mouth: {it['type'].replace('_', ' ')} at {it['at']:.1f}s - {it['reason'][:70]}")
+        for it in r.get("word_issues") or []:
+            print(f"      words: possible clipped word at {it['at']:.1f}s - {it['text'][:70]}")
         if r.get("qa_sheet"):
             print(f"      QA frames: {r['qa_sheet']}")
     return 0 if ok else 1
@@ -327,6 +335,41 @@ def cmd_brand(a):
         b.setdefault("style_references", []).append(path)
         brand_mod.save(b)
         print(f"Saved style reference {path} (used only to guide your edits; not redistributed).")
+    return 0
+
+
+def cmd_cards(a):
+    from . import hyperframes as hf
+    if a.action == "list":
+        for c in hf.cards(tier=a.tier, purpose=a.purpose, style=a.style):
+            slots = ", ".join(s["name"] for s in c["slots"]) or "-"
+            print(f"{c['id']:<42} [{c['style']}/{c['tier']}/{c['purpose']}]  slots: {slots:<30}  {c['file']}")
+        return 0
+
+
+def cmd_music(a):
+    from . import music
+    if a.action == "status":
+        print(json.dumps(music.status(), indent=2))
+    return 0
+
+
+def cmd_sfx(a):
+    from . import sfx
+    if a.action == "generate":
+        items = sfx.generate(force=a.force)
+        print(json.dumps(items, indent=1))
+    return 0
+
+
+def cmd_card(a):
+    from . import pipeline
+    text = f'add a {a.type.replace("-", " ")} card saying "{a.text}"'
+    plan, applied = pipeline.revise(a.project, request=text, at=a.at)
+    if not applied:
+        print(f"Couldn't add a {a.type} card from that; check the card library (studio cards list).")
+        return 2
+    print(json.dumps({"version": plan["version"], "status": plan["status"], "applied": applied}, indent=1))
     return 0
 
 
@@ -455,11 +498,12 @@ def main(argv=None):
     s.add_argument("--shorts", type=int, default=5, help="number of Shorts to find (repurpose mode)")
     s.add_argument("--short-min", type=float, default=20)
     s.add_argument("--short-max", type=float, default=60)
-    s.add_argument("--caption-style", choices=["clean", "minimal", "karaoke", "bold"])
-    s.add_argument("--pace", choices=["relaxed", "natural", "tight", "shorts"])
+    s.add_argument("--caption-style", choices=["clean", "minimal", "karaoke", "bold", "playbook"])
+    s.add_argument("--pace", choices=["relaxed", "natural", "tight", "shorts", "playbook"])
     s.add_argument("--type", choices=["tutorial", "sales", "talking_head", "promo", "interview"])
     s.add_argument("--topic")
     s.add_argument("--cold-open", action="store_true")
+    s.add_argument("--music-mood", help='e.g. "confident" or "chill" - picks a licensed bed track (studio music status)')
     s.add_argument("--quiet", action="store_true")
     s.set_defaults(fn=cmd_plan)
 
@@ -499,6 +543,31 @@ def main(argv=None):
     s.add_argument("args", nargs="*")
     s.set_defaults(fn=cmd_brand)
 
+    s = sub.add_parser("cards", help="browse the HyperFrames card library")
+    s.add_argument("action", choices=["list"])
+    s.add_argument("--tier", choices=["tier1", "tier2"])
+    s.add_argument("--purpose")
+    s.add_argument("--style")
+    s.set_defaults(fn=cmd_cards)
+
+    s = sub.add_parser("music", help="the licensed background-music library (~/VibeStudio/music)")
+    s.add_argument("action", choices=["status"])
+    s.set_defaults(fn=cmd_music)
+
+    s = sub.add_parser("sfx", help="the synthesized sound-effect palette")
+    s.add_argument("action", choices=["generate"])
+    s.add_argument("--force", action="store_true", help="regenerate every file even if already built")
+    s.set_defaults(fn=cmd_sfx)
+
+    s = sub.add_parser("card", help="add a HyperFrames motion-graphic card to a plan")
+    s.add_argument("action", choices=["add"])
+    s.add_argument("project")
+    s.add_argument("--type", required=True,
+                   choices=["lower-third", "label", "section", "stat", "quote", "definition", "list"])
+    s.add_argument("--text", required=True, help="the text to put in the card (e.g. a name, a stat, a quote)")
+    s.add_argument("--at", type=float, help="source time in seconds; default is when the text is spoken")
+    s.set_defaults(fn=cmd_card)
+
     s = sub.add_parser("keys")
     s.add_argument("action", choices=["set", "status"])
     s.add_argument("name", nargs="?", choices=list(config.SECRET_NAMES))
@@ -522,6 +591,14 @@ def main(argv=None):
     s.add_argument("--highlight", help="word(s) drawn in the brand highlight color")
     s.add_argument("--at", help="source times to use, e.g. 12.5,40")
     s.add_argument("--photo", action="append", help="posed photo(s) to use instead of video frames (repeatable)")
+    s.add_argument("--layout", default="face-number",
+                   choices=["face-number", "payment", "checklist", "screenshot", "two-person", "clean-white",
+                            "shorts-cover"])
+    s.add_argument("--item", action="append", help="checklist row, e.g. 'More leads ✗' or 'Follow-up ✓' (repeatable)")
+    s.add_argument("--amount", help='payment layout amount, e.g. "$30,000+" (must be a real number from the video)')
+    s.add_argument("--photo2", help="second person's photo (two-person layout)")
+    s.add_argument("--screenshot", help="image for the screenshot layout")
+    s.add_argument("--chip", help='small tag above the title, e.g. "Google Maps"')
     s.set_defaults(fn=cmd_thumbnail)
 
     s = sub.add_parser("serve")
