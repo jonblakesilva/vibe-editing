@@ -409,7 +409,7 @@ def _clip_punch_ins(plan: dict, clip: dict, words: list[dict]) -> list[dict]:
 def _short_graphics(plan: dict, clip: dict) -> list[dict]:
     g = [x for x in plan.get("graphics", []) if x.get("enabled", True) and clip["start"] <= x["start"] < clip["end"]
          and x["template"] in ("KineticTitle", "EditorialTitle", "Callout", "CallToAction", "StatPanels",
-                               "FloatingCards", "EndCard", "File")]
+                               "FloatingCards", "EndCard", "File", "HyperCard")]
     return g
 
 

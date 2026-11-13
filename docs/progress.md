@@ -1,5 +1,11 @@
 # Progress
 
+## Shipped (2026-11-12)
+
+**Smart vertical screen framing** — The screen panel in screencam vertical masters (Shorts, vertical outputs) now pans/zooms to the real on-screen content (frame differencing + edge density, ignoring the browser chrome) instead of a fixed centre crop, with manual `screen_focus` keyframe overrides. Rebuilt masters write a new `layout_vertical_v2.mp4` and never overwrite the one in use (`vertical_path_v1` keeps the old path). Fixed for Month 1 SEO Cleaning Company and 250 Cleaning Job Full Year. New unit tests in `studio/tests/test_compose.py` for the focus-box math.
+
+**Month 1 SEO Shorts: owner review comments** — Visual hook cards (KineticTitle, ~2.5s) on all 3 Shorts, a "FIRST MONTH'S RESULTS" label on Short 2, closing CTA cards (EndCard: "Free tools for contractors" / free.theleadventure.com) on all 3, Short 2's missed "uh" filler cut (the first transcription never caught it as a word), and Short 3's dead-space pause (merged into one transcribed word) cut. Also fixed a bug where `pipeline._short_graphics()` silently dropped every HyperFrames tier2 card from Shorts renders.
+
 ## Shipped (2026-11-11)
 
 **HyperFrames card engine** — 410 branded motion cards (tier1 overview/section/stat, tier2 lower-third) in two styles (kallaway, vox-explainer). Cards render to transparent ProRes MOV, cached by content hash. CLI: `studio card add <p> --type lower-third --text "..."`. Revision phrase: `add a lower third card saying "..."`. Tier1 cards are landscape-only.
@@ -29,7 +35,6 @@
 ## Open items
 
 - **Holes Short preview:** must be re-rendered in its original style (not the new playbook captions).
-- **Month 1 SEO video:** review leftover restarts in the listen transcript after last render.
 - **GHL scheduling:** blocked on Media Storage upload or a Private Integration key.
 - **Overlay wiring:** HyperCard/Remotion composition into render.py (in progress).
 - **SFX mixing:** final pass on SFX levels in the audio mix (in progress).
