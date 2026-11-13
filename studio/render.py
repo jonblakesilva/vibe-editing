@@ -685,7 +685,7 @@ def finish(cut: Path, plan: dict, tl: Timeline, words: list[dict], out_spec: dic
     script.write_text(";\n".join(filters), encoding="utf-8")
     args = [*inputs, "-filter_complex_script", str(script), "-map", "[vout]", "-map", "[aout]",
             "-r", str(fps), *media.video_encoder(quality), "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-            "-t", f"{info.duration:.3f}", str(tmp)]
+            "-t", f"{info.duration:.3f}", "-movflags", "+faststart", str(tmp)]  # index up front: browsers start long videos at once
     media.run_ffmpeg(args, duration=info.duration, cancel=cancel, env=media.fontconfig_env(),
                      on_progress=(lambda p: progress("finish", p)) if progress else None)
     archive_previous(out_path, {"plan_version": plan.get("version")})
